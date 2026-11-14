@@ -98,6 +98,16 @@ class WriterTest(unittest.TestCase):
         act = self.p.facts()
         self.assertEqual([f['text'] for f in act], ['绿源可降解杯每个0.39元']); self.assertFalse(self.p.fact(old)['active'])
 
+    def test_same_batch_near_duplicates_are_candidates(self):
+        a = self.p.add_object('配置'); b = self.p.add_object('日志')
+        f1 = self.p.add_fact([a], 'inventory/config.py将DEFAULT_PAGE_SIZE设为50；list未指定--limit时使用该值。')
+        f2 = self.p.add_fact([b], '项目的list命令未提供--limit时默认分页大小为50。')
+        f3 = self.p.add_fact([a], '低库存阈值为10'); f4 = self.p.add_fact([b], '滨江店员工10人')
+        bt = writer.Batch(self.home, {'p': self.p}, []); bt.new_facts = [('p', x) for x in (f1, f2, f3, f4)]
+        pairs = {frozenset((f['id'], g['id'])) for _, f, g in bt.conflict_candidates()}
+        self.assertIn(frozenset((f1, f2)), pairs)                 # 同一取值说了两遍
+        self.assertNotIn(frozenset((f3, f4)), pairs)              # 只是碰巧数字相同
+
     def test_secrets_never_reach_prompt_or_store(self):
         t = self.turns(('数据库连接是 postgres://admin:hunter2pass@db.local/inv，端口改成8443。', '好的。'))
         main = J(objects=[{'key': 'k', 'name': '部署', 'scope': 'project', 'parents': []}],

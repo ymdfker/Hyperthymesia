@@ -330,9 +330,13 @@ class Batch:
                 hit = (f['title'] and f['title'] == g['title']) or len(_common_prefix(a, b)) >= 12 or difflib.SequenceMatcher(None, a, b).ratio() >= 0.85
                 hit = hit or (same_obj and size <= 6 and (sc, g['id']) not in self.new_facts)
                 hit = hit or (same_obj and f['source_role'] != 'assistant' and g['source_role'] != 'assistant' and (sc, g['id']) not in self.new_facts)
-                if not hit:
-                    na, nb = set(re.findall(r'\d+(?:\.\d+)?', a)), set(re.findall(r'\d+(?:\.\d+)?', b))
-                    hit = bool(na and nb and na != nb and difflib.SequenceMatcher(None, a, b, autojunk=False).find_longest_match(0, len(a), 0, len(b)).size >= 6)
+                na, nb = set(re.findall(r'\d+(?:[.,]\d+)*', a)), set(re.findall(r'\d+(?:[.,]\d+)*', b))
+                lcs = difflib.SequenceMatcher(None, a, b, autojunk=False).find_longest_match(0, len(a), 0, len(b)).size
+                if not hit:   # 同一句话换了数字（跨对象也查）：可能是新旧值并存
+                    hit = bool(na and nb and na != nb and lcs >= 6)
+                if not hit and (sc, g['id']) in self.new_facts:
+                    # 同一批新写的两条把同一个取值说了两遍（措辞、归属对象都可能不同）：一方的数字都在另一方里，且有共同片段
+                    hit = bool(na and nb and (na <= nb or nb <= na) and lcs >= 4)
                 if hit:
                     seen.add(frozenset((sc, n, g['id']))); groups.append((sc, f, g))
         return groups[:CONFLICT_CAP]
