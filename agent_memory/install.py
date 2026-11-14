@@ -139,6 +139,30 @@ def qoder(project=None, remove=False):
     return [sp, mp]
 
 
+def qoder_writer_check():
+    """Qoder 桌面版不带命令行：写入要用 Qoder 自己的额度，需要官方 qodercli 并登录一次（不复用桌面版登录，已实测）。
+    只在用户执行 install qoder 时检查和询问，不用 Qoder 的用户永远不会装它。返回给用户看的提示。"""
+    import subprocess
+    exe = shutil.which('qodercli')
+    if not exe:
+        npm = shutil.which('npm')
+        if npm and sys.stdin.isatty():
+            ans = input('写入记忆要用 Qoder 的额度，需要安装官方命令行 qodercli（npm 包 @qoder-ai/qodercli，约 70MB）。现在安装？[y/N] ')
+            if ans.strip().lower() in ('y', 'yes'):
+                subprocess.run([npm, 'install', '-g', '@qoder-ai/qodercli'], check=False)
+                exe = shutil.which('qodercli')
+        if not exe:
+            return ('未安装 qodercli：记忆可以读取，但写入无法使用 Qoder 额度。安装：npm install -g @qoder-ai/qodercli，'
+                    '然后执行 qodercli login；或在 ~/.agent-memory/config.toml 里配置自己的 API key。')
+    try:
+        st = json.loads(subprocess.run([exe, 'status', '--output', 'json'], capture_output=True, text=True, timeout=60).stdout or '{}')
+    except (ValueError, subprocess.SubprocessError, OSError):
+        st = {}
+    if not st.get('logged_in'):
+        return 'qodercli 已安装但未登录：请执行一次 qodercli login（浏览器授权），之后写入会自动使用你的 Qoder 额度。'
+    return 'qodercli 已登录：写入将使用你的 Qoder 额度。'
+
+
 AGENTS = {'claude': claude, 'codex': codex, 'codebuddy': codebuddy, 'qoder': qoder}
 
 
@@ -149,6 +173,8 @@ def run(argv, remove=False):
     project = argv[argv.index('--project') + 1] if '--project' in argv else None
     files = AGENTS[argv[0]](project, remove)
     print(('已移除' if remove else '已写入') + '：' + '、'.join(str(f) for f in files))
+    if argv[0] == 'qoder' and not remove:
+        print(qoder_writer_check())
     if argv[0] == 'codex' and not remove:
         print('请在 Codex 里执行 /hooks，审核并信任 hyperthymesia 的钩子（新钩子未经信任不会运行）。')
     return 0

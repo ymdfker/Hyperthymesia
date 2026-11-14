@@ -4,7 +4,7 @@
   codex  ：codex exec，借 ChatGPT 订阅（默认模型 gpt-5.6-luna）
   claude ：claude -p，借 Claude 订阅（默认 claude-haiku-5-5）
   codebuddy：codebuddy -p（WorkBuddy 自带），借 WorkBuddy 账号；参数与 claude 同构，支持会话续接
-  qoder  ：qoder -p，借 Qoder 账号（实验：未实测，不支持会话续接）
+  qoder  ：qodercli -p，借 Qoder 账号（需另装 qodercli 并登录一次；不支持会话续接）
   dsh    ：DeepSeek Harness 无头模式，借其配置的模型与 key（实验：未实测，不支持会话续接）
   openai ：任意 OpenAI 兼容接口（OpenAI、DeepSeek 等）；key 只从配置里写明的环境变量读取，强制 JSON 输出
   fake   ：测试用，按顺序返回预设回答（不调用任何模型）
@@ -135,7 +135,7 @@ def _one_shot_cli(home, cmd, prompt):
 
 
 def _qoder(home, system, prompt, sid, log):
-    exe = shutil.which('qoder') or shutil.which('qodercli')
+    exe = shutil.which('qodercli')   # 只认 qodercli：Qoder IDE 也带一个叫 qoder 的启动器，不能混用
     if not exe: raise ProviderError('找不到 qoder 命令')
     cmd = [exe, '-p', '-o', 'json'] + (['--model', model()] if model() else [])
     out = _one_shot_cli(home, cmd, system + '\n\n' + prompt)
