@@ -88,6 +88,13 @@ def on_prompt(d, agent):
     st.execute('INSERT OR REPLACE INTO backlog_agent VALUES(?,?)', (sid, agent))   # 写入时用这个宿主自己的便宜模型
     st.execute('INSERT OR REPLACE INTO backlog(session, turn, project, user_text, started_at, diff, numstat, written) VALUES(?,?,?,?,?,?,?,0)',
                (sid, n, str(root or ''), d.get('prompt') or '', time.strftime('%Y-%m-%dT%H:%M:%S'), 'tree:' + tree, ''))
+    # 有的宿主（如 CodeBuddy）不把钩子注入的内容存进会话记录，续接会话后之前注入的记忆就不在上文了：
+    # 会话记录里找不到我们注入过的标记时，按“上文没有记忆”处理，重新注入全文
+    tp = d.get('transcript_path')
+    if tp and Path(tp).exists():
+        try:
+            if '长期记忆' not in Path(tp).read_text(encoding='utf-8', errors='replace'): reader.reset_session(st, sid)
+        except OSError: pass
     from .mcp_server import open_stores
     return ADAPTERS[agent][1]('prompt-submit', reader.context(open_stores(cwd), st, sid))
 

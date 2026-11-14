@@ -56,6 +56,17 @@ class HookFlowTest(unittest.TestCase):
         ctx = self.call('prompt-submit', {'session_id': 's1', 'cwd': str(self.proj), 'prompt': '压缩之后'})
         self.assertIn('（长期记忆全文）', ctx['hookSpecificOutput']['additionalContext'])
 
+    def test_reinject_when_host_does_not_keep_injected_context(self):
+        pdb, _ = paths.project_db(self.proj); st = Store(pdb, 'p'); o = st.add_object('配置'); st.add_fact([o], '默认分页大小为50')
+        tr = self.root / 'host.jsonl'; tr.write_text(json.dumps({'type': 'message', 'role': 'user', 'content': '问'}), encoding='utf-8')
+        d = {'session_id': 'r1', 'cwd': str(self.proj), 'prompt': '分页？', 'transcript_path': str(tr)}
+        self.assertIn('默认分页大小为50', self.call('prompt-submit', d)['hookSpecificOutput']['additionalContext'])
+        # 会话记录里没有存下注入内容（CodeBuddy 的情况）：下一轮仍注入全文
+        self.assertIn('默认分页大小为50', self.call('prompt-submit', dict(d, prompt='再问'))['hookSpecificOutput']['additionalContext'])
+        # 会话记录里有注入内容（Claude Code 的情况）：没有变化就不重复注入
+        tr.write_text(tr.read_text(encoding='utf-8') + '\n' + json.dumps({'attachment': '（长期记忆全文）……'}, ensure_ascii=False), encoding='utf-8')
+        self.assertEqual(self.call('prompt-submit', dict(d, prompt='第三问')), {})
+
     def test_hook_never_breaks_host(self):
         with mock.patch('sys.stdin', io.StringIO('not json')), mock.patch('sys.stdout', new_callable=io.StringIO) as out:
             self.assertEqual(hooks.run(['stop']), 0)
