@@ -20,6 +20,32 @@ def _context(argv):
 
 
 COMMANDS['serve'] = (_serve, '启动 MCP 只读服务（stdio）')
+
+
+def _hook(argv):
+    from .hooks import run
+    return run(argv)
+
+
+def _write(argv):
+    from .writecmd import run
+    return run(argv)
+
+
+def _install(argv):
+    from .install import run
+    return run(argv)
+
+
+def _uninstall(argv):
+    from .install import run
+    return run(argv, remove=True)
+
+
+COMMANDS['hook'] = (_hook, '钩子入口：hook <prompt-submit|stop|pre-compact|session-start|session-end> --agent <claude|codex>')
+COMMANDS['write'] = (_write, '写入积压的已完成轮次：write [--project 目录]')
+COMMANDS['install'] = (_install, '给 agent 写入 MCP 与钩子配置：install <claude|codex> [--project 目录]')
+COMMANDS['uninstall'] = (_uninstall, '移除本框架写入的配置：uninstall <claude|codex> [--project 目录]')
 COMMANDS['context'] = (_context, '打印当前目录会注入的记忆（调试用）')
 
 
