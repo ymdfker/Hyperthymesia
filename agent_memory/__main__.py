@@ -1,9 +1,9 @@
-"""Single entry point of the packaged executable: agent-memory <command> ...
-Commands are added as the corresponding parts are ported (design 27.2)."""
+"""打包后单一可执行文件的入口：agent-memory <子命令> ...
+各子命令随对应模块移植逐步加入（设计 27.2）。"""
 import sys
 from . import __version__
 
-COMMANDS = {}   # name -> (callable(argv), one-line help); filled by later steps (serve, hook, write, install, doctor)
+COMMANDS = {}   # 子命令名 -> (处理函数(argv), 一行说明)；serve、hook、write、install、doctor 在后续步骤加入
 
 
 def main(argv=None):
@@ -15,7 +15,7 @@ def main(argv=None):
     if argv[0] in ('-V', '--version'):
         print(__version__); return 0
     if argv[0] not in COMMANDS:
-        print('unknown command: %s' % argv[0], file=sys.stderr); return 2
+        print('未知子命令：%s' % argv[0], file=sys.stderr); return 2
     return COMMANDS[argv[0]][0](argv[1:]) or 0
 
 

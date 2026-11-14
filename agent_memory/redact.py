@@ -1,13 +1,12 @@
-"""Credential redaction for writer material (design 26.3 A1). Applied by the program to every text that goes to the
-writer (user message, assistant reply, workspace change block) before it is sent or stored as a source segment, so a
-secret never reaches the writer model, the memory store or the injected snapshot.
+"""写入材料的凭据脱敏（设计 26.3 A1）。程序在任何文本（用户原话、助手回复、工作区改动块）送入写入器、
+存为原文片段之前统一处理，凭据不会到达写入模型、记忆库或注入快照。
 
-Two layers:
- 1. known token shapes (provider keys, private keys, JWTs, URLs with a password) are replaced wherever they appear;
- 2. assignments whose NAME says it holds a secret (password, secret, token, api_key, ...) get their VALUE replaced,
-    unless the value is plainly not a secret (a number, a boolean, an env-var reference, an empty or placeholder value).
-A replaced value becomes 〔已脱敏:kind〕, so the writer still learns that the setting exists and where it lives.
-Usage: from agent_memory.redact import redact; text, hits = redact(text)"""
+两层：
+ 1. 已知格式（各家 key、私钥、JWT、带密码的 URL 等）出现在哪里都替换；
+ 2. 名字表明是凭据的赋值（password、secret、token、api_key 等，含中文“密码是…”）替换其值；
+    值明显不是凭据时不替换（数字、布尔、环境变量引用、空值、占位符）。
+被替换处写成〔已脱敏:类型〕，写入器仍能知道该配置存在、放在哪里。
+用法：from agent_memory.redact import redact; text, hits = redact(text)"""
 import re
 
 SHAPES = [
@@ -24,7 +23,7 @@ SHAPES = [
 ]
 NAME = r'[A-Za-z0-9_\-\.]*(?:passw(?:or)?d|passwd|pwd|secret|token|api[_\-]?key|apikey|access[_\-]?key|private[_\-]?key|client[_\-]?secret|auth|credential|密码|口令|密钥|令牌)[A-Za-z0-9_\-\.]*'
 ASSIGN = re.compile(r'(?i)(\b' + NAME + r'\b["\']?\s*(?:=|:|是|为)\s*)(["\']?)([^\s"\',;)}\]]{4,})(\2)')
-ASSIGN_ZH = re.compile(r'((?:密码|口令|密钥|令牌|私钥|验证码)\s*(?:是|为|:|：|=)\s*)([^\s，。,;；、)）]{4,})')   # CJK has no word boundary
+ASSIGN_ZH = re.compile(r'((?:密码|口令|密钥|令牌|私钥|验证码)\s*(?:是|为|:|：|=)\s*)([^\s，。,;；、)）]{4,})')   # 中文没有单词边界，单独匹配
 SAFE = re.compile(r'(?i)^(?:\d+(?:\.\d+)?|true|false|null|none|yes|no|xxx+|\*+|<[^>]+>|\$\{?[A-Z_][A-Z0-9_]*\}?|os\.environ.*|getenv.*|process\.env.*|env\(.*|your[_\-].*|changeme|placeholder|example.*|redacted.*|〔已脱敏.*)$')
 SAFE_NAME = re.compile(r'(?i)(max|min)[_\-]?tokens?|tokens?[_\-]?(limit|count|budget|len|size)|token[_\-]?type|auth[_\-]?(url|method|mode|type|enabled|provider)|author')
 

@@ -1,4 +1,4 @@
-"""Step 1 foundation: paths/scopes, SQLite store, redaction, workspace change capture (git and no-git)."""
+"""第 1 步基础模块：路径与作用域、SQLite 存储、脱敏、工作区改动采集（有 git 与无 git）。"""
 import os, subprocess, sys, tempfile, unittest
 from pathlib import Path
 from unittest import mock
@@ -60,7 +60,7 @@ class StoreTest(TmpHome):
         u = s.add_fact([o], '用户改为周二四六训练', evidence=[('t5u', '周二四六')])
         s.set_advice_status(a, 'basis_changed', '训练日已改')
         self.assertIn('basis_changed', s.fact(a)['advice_status'])
-        self.assertEqual(s.evidence_turns(), {'t5u'})   # assistant-only evidence does not cover a turn
+        self.assertEqual(s.evidence_turns(), {'t5u'})   # 只有助手证据不算覆盖该轮
 
     def test_state_db_tables(self):
         st = state(self.root / 'home')

@@ -1,11 +1,10 @@
-"""Per-turn workspace changes (design 23.58-23.62, 26.3 A1), host independent.
+"""每轮工作区改动（设计 23.58–23.62、26.3 A1），与宿主无关。
 
-Snapshot at turn start, snapshot at turn end, diff -> the turn's change block for the writer.
-- With git installed: a shadow repository (own git-dir under <home>/shadow, work tree = the agent's cwd). The user's
-  repository, index and history are never touched; .gitignore still applies; non-git folders work too.
-- Without git: a plain file snapshot (sizes, mtimes, text of small files) under <home>/snapshots, diffed with difflib.
-Both exclude dependency/build folders, binaries, logs, databases and credential files; every change block is passed
-through redact() as well."""
+轮次开始拍快照，轮次结束再拍快照，两者对比 -> 本轮给写入器的改动块。
+- 装了 git：用影子仓库（独立 git-dir 放在 <home>/shadow，工作树 = agent 的 cwd）。
+  不碰用户自己的仓库、暂存区和历史；.gitignore 照样生效；非 git 目录也能用。
+- 没装 git：纯文件快照（小文本文件全文）存在 <home>/snapshots，用 difflib 对比。
+两种方式都排除依赖/构建目录、二进制、日志、数据库和凭据文件；改动块还会再过一遍 redact()。"""
 import difflib, fnmatch, hashlib, json, os, re, shutil, subprocess, time
 from pathlib import Path
 from .redact import redact
@@ -28,7 +27,7 @@ def has_git():
 def _key(cwd): return hashlib.sha1(str(Path(cwd).resolve()).encode()).hexdigest()[:16]
 
 
-# ---------- git shadow repository
+# ---------- git 影子仓库
 def _shadow(home, cwd):
     d = Path(home) / 'shadow' / _key(cwd)
     if not (d / 'HEAD').exists():
@@ -36,7 +35,7 @@ def _shadow(home, cwd):
         subprocess.run(['git', 'init', '-q', '--bare', str(d)], check=True, capture_output=True)
         (d / 'info').mkdir(exist_ok=True)
     ex = d / 'info' / 'exclude'; lines = list(EXCLUDE)
-    try: lines.append('/' + Path(home).resolve().relative_to(Path(cwd).resolve()).as_posix() + '/')   # memory home inside the workspace
+    try: lines.append('/' + Path(home).resolve().relative_to(Path(cwd).resolve()).as_posix() + '/')   # 记忆目录在工作区内时排除它
     except ValueError: pass
     if not ex.exists() or ex.read_text() != '\n'.join(lines) + '\n': ex.write_text('\n'.join(lines) + '\n')
     return d
@@ -66,7 +65,7 @@ def _git_diff(home, cwd, a, b):
     return diff, _git(gd, cwd, 'diff-tree', '--numstat', '--no-renames', a, b).stdout
 
 
-# ---------- plain file snapshot (no git)
+# ---------- 纯文件快照（无 git）
 def _excluded(rel, is_dir):
     name = rel.rsplit('/', 1)[-1]; hit = False
     for pat in EXCLUDE:
@@ -93,7 +92,7 @@ def _file_snapshot(home, cwd):
                 if st.st_size > MAX_FILE: continue
                 b = p.read_bytes()
             except OSError: continue
-            if b'\0' in b[:4096]: continue   # binary
+            if b'\0' in b[:4096]: continue   # 二进制文件
             files[p.relative_to(cwd).as_posix()] = b.decode('utf-8', 'replace')
     sid = hashlib.sha1(json.dumps(files, sort_keys=True).encode()).hexdigest()[:16]
     d = Path(home) / 'snapshots' / _key(cwd); d.mkdir(parents=True, exist_ok=True)
@@ -123,10 +122,10 @@ def snapshot(home, cwd):
 def diff(home, cwd, a, b):
     if a.startswith('git:') and b.startswith('git:'): return _git_diff(home, cwd, a, b)
     if a.startswith('file:') and b.startswith('file:'): return _file_diff(home, cwd, a, b)
-    return '', ''   # git appeared or vanished between the two snapshots: skip this turn rather than guess
+    return '', ''   # 两次快照之间 git 装上或被卸载：跳过本轮，不做猜测
 
 
-# ---------- change block for the writer
+# ---------- 给写入器的改动块
 def _files(diff_text):
     out = []; cur = None
     for l in diff_text.splitlines():
@@ -136,7 +135,7 @@ def _files(diff_text):
 
 
 def change_block(diff_text, numstat=''):
-    """changed lines per file, config/docs first; files that do not fit CAP are named with +/- counts, never cut mid-file."""
+    """按文件列出变更行，配置/文档优先；超出 CAP 的文件只列名称和增删行数，绝不把单个文件截成半截。"""
     fs = [f for f in _files(diff_text) if f[1]]
     if not fs: return ''
     fs.sort(key=lambda f: (0 if PRIORITY.search(f[0]) else 1, len('\n'.join(f[1]))))
