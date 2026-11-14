@@ -1,24 +1,28 @@
-"""自动选择写入模型（用户要求：不写死模型，自动识别当前可用的模型，用其中最便宜且够用的一个）。
+"""自动选择写入模型：用户使用时识别当前可用的模型，按价格选最便宜且够用的一个；不写死模型，不维护价格表，不靠名字猜。
 
-1. 列出可用模型：从宿主 agent 自己的渠道读取——codebuddy --help 里 --model 的说明、qodercli --list-models、
-   Codex 的 ~/.codex/models_cache.json；Claude Code 没有列表命令，用别名 haiku / sonnet / opus（别名自动指向最新版）。
-2. 按名字粗排：名字带 flash / lite / mini / haiku / luna / efficient / fast 等低价档字样的排前面；auto、本地自定义模型不参与。
-3. 试探：对排在前面的几个各发一次极小的 JSON 抽取任务，确认能按要求输出（太弱的模型会把记忆写坏，不能只看便宜），
-   并记下宿主报告的单次消耗（credit / 美元）。选消耗最低且通过的；宿主不报告消耗时（Codex）按粗排顺序取第一个通过的。
-4. 结果缓存在 ~/.hyperthymesia/models.json，7 天后或调用报“模型不可用”时重新识别。"""
-import json, os, re, shutil, subprocess, time
+价格从哪里来（按宿主 agent）：
+- CodeBuddy / WorkBuddy：它从服务器拉下来的模型配置缓存在本机 ~/.codebuddy/local_storage/，每个模型带官方倍率
+  （如 "credits": "x0.08"），直接读取，不花任何额度。
+- Qoder：读取官方文档的模型倍率表（docs.qoder.com 模型选择器页面的 Markdown 版，如 Qwen3.8-Flash 0.1×），不花额度。
+  文档里没有的模型排在最后；文档读不到时才退回实测（对每个模型发一次短请求，按宿主报告的消耗比较）。
+- Claude Code：没有模型列表和本机价格，只有 haiku/sonnet/opus 三档：各发一次短请求，按报告的美元消耗比较，结果缓存。
+- Codex：既不给价格也不报告消耗。读取 OpenAI 官方价格页（platform.openai.com/docs/pricing），
+  截取各模型名附近的文字，由便宜模型整理出价格；读取失败时退回 Codex 模型说明里标为 affordable 的模型。
+选择：按价格从低到高，对候选依次做一次能力试探（必须正确输出 JSON：太弱的模型会把记忆写坏），第一个通过的即选中。
+结果缓存在 ~/.hyperthymesia/models.json；模型列表变化、30 天到期或调用报“模型不可用”时重新识别。"""
+import json, os, re, shutil, subprocess, time, urllib.request
 from pathlib import Path
 
 from . import paths
 
-TTL = 7 * 86400
-PROBE_TOP = 4
-CHEAP_WORDS = ('free', 'flash', 'lite', 'mini', 'nano', 'haiku', 'luna', 'efficient', 'fast', 'small', 'turbo')
-EXPENSIVE_WORDS = ('max', 'pro', 'opus', 'ultimate', 'astra', 'sol', 'preview')
+TTL = 30 * 86400
 SKIP = re.compile(r'^(auto|custom-local:.*|codex-auto-review)$', re.I)
 PROBE_SYSTEM = '你是信息抽取程序。只回复一个 JSON 对象，不要任何其他文字。'
 PROBE_PROMPT = ('从下面对话抽取事实，回复 {"facts":[{"key":"…","value":"…"}]}，key 只用 page_size 和 reviewer。\n'
                 '用户：默认分页原来是 20，现在改成 50。代码评审以后交给 Marco。')
+TINY_PROMPT = '只回复 {"ok":true}'
+OPENAI_PRICING = 'https://platform.openai.com/docs/pricing'   # openai.com/api/pricing 对脚本返回 403（已实测）
+QODER_PRICING = 'https://docs.qoder.com/user-guide/chat/model-tier-selector.md'
 
 
 def _cache_path(): return paths.home() / 'models.json'
@@ -32,13 +36,13 @@ def _load():
 def _save(d): _cache_path().write_text(json.dumps(d, ensure_ascii=False, indent=1), encoding='utf-8')
 
 
+# ---------------------------------------------------------------- 可用模型
 def list_models(provider):
-    """当前可用的模型 ID 列表（顺序即宿主给出的顺序）。"""
     from .install import codebuddy_exe
     from .providers import qodercli_cmd
     try:
         if provider == 'codebuddy' and codebuddy_exe():
-            # CodeBuddy 没有列模型的子命令（“codebuddy models”会被当成一句提问交给 agent）；--help 里 --model 的说明列出了当前账号可用的模型
+            # CodeBuddy 没有列模型的子命令（“codebuddy models”会被当成一句提问交给 agent）；--help 里 --model 的说明列出了可用模型
             out = subprocess.run([codebuddy_exe(), '--help'], capture_output=True, text=True, encoding='utf-8', timeout=120).stdout
             m = re.search(r'Currently supported:\s*\(([^)]*)\)', out)
             return [i.strip() for i in m.group(1).split(',') if i.strip()] if m else []
@@ -47,8 +51,7 @@ def list_models(provider):
                                  stdin=subprocess.DEVNULL).stdout
             return [l.strip() for l in out.splitlines()[1:] if l.strip()]
         if provider == 'codex':
-            d = json.loads((Path.home() / '.codex' / 'models_cache.json').read_text(encoding='utf-8'))
-            return [m['slug'] for m in d.get('models', []) if m.get('visibility', 'list') == 'list']
+            return [m['slug'] for m in _codex_cache().get('models', []) if m.get('visibility', 'list') == 'list']
         if provider == 'claude' and shutil.which('claude'):
             return ['haiku', 'sonnet', 'opus']
     except (OSError, ValueError, subprocess.SubprocessError):
@@ -56,25 +59,116 @@ def list_models(provider):
     return []
 
 
-def rank(ids):
-    """按名字粗排：低价档字样加分、高价档字样减分；同分保持宿主原顺序。"""
-    def score(i):
-        n = i.lower()
-        return -sum(w in n for w in CHEAP_WORDS) * 2 + sum(w in n for w in EXPENSIVE_WORDS)
-    return sorted([i for i in ids if not SKIP.match(i)], key=lambda i: (score(i), ids.index(i)))
+def _codex_cache():
+    try: return json.loads((Path.home() / '.codex' / 'models_cache.json').read_text(encoding='utf-8'))
+    except (OSError, ValueError): return {}
 
 
+# ---------------------------------------------------------------- 价格
+def codebuddy_prices():
+    """从 CodeBuddy 本机缓存的模型配置里读官方倍率：{模型 ID: 倍率}。"""
+    out = {}
+    d = Path.home() / '.codebuddy' / 'local_storage'
+    for f in sorted(d.glob('*.info'), key=lambda p: p.stat().st_mtime) if d.exists() else []:
+        try:
+            t = f.read_text(encoding='utf-8', errors='replace')
+            obj, _ = json.JSONDecoder().raw_decode(t[t.index('{'):])
+        except (ValueError, OSError):
+            continue
+        for m in ((obj.get('data') or {}).get('models') or []) if isinstance(obj, dict) else []:
+            c = re.fullmatch(r'x?\s*([0-9.]+)', str(m.get('credits', '')).strip())
+            if m.get('id') and c: out[m['id']] = float(c.group(1))   # 较新的文件覆盖较旧的
+    return out
+
+
+def _fetch(url):
+    req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0 (compatible; hyperthymesia)'})
+    with urllib.request.urlopen(req, timeout=30) as r: return r.read().decode('utf-8', 'replace')
+
+
+def qoder_doc_prices(ids):
+    """Qoder 官方文档里的模型倍率：表格行“| 模型名 | 说明 | 0.1× |”，有划线的旧价时取最后一个（当前价）。"""
+    try: md = _fetch(QODER_PRICING)
+    except Exception: return {}
+    low = {i.lower(): i for i in ids}; out = {}
+    for line in md.splitlines():
+        cells = [c.strip() for c in line.strip().strip('|').split('|')]
+        if len(cells) < 2: continue
+        name = re.sub(r'[*\\~]|\(.*?\)', '', cells[0]).strip().lower()
+        nums = re.findall(r'([0-9]+(?:\.[0-9]+)?)\s*[×x]', ' '.join(cells[1:]))
+        if name in low and nums: out[low[name]] = float(nums[-1])
+    return out
+
+
+def measure(provider, model):
+    """极短请求的实际消耗（宿主报告的 credit 或美元）；失败返回 None。"""
+    from . import providers
+    old = os.environ.get('HYPERTHYMESIA_MODEL'); os.environ['HYPERTHYMESIA_MODEL'] = model
+    try: return providers.call(paths.home(), PROBE_SYSTEM, TINY_PROMPT).usage.get('cost')
+    except Exception: return None
+    finally:
+        if old is None: os.environ.pop('HYPERTHYMESIA_MODEL', None)
+        else: os.environ['HYPERTHYMESIA_MODEL'] = old
+
+
+def codex_prices(ids):
+    """读取 OpenAI 官方价格页，请便宜模型整理出这些模型的价格（美元/百万 token：输入、输出）；失败返回 {}。"""
+    from . import providers, writer
+    try:
+        html = _fetch(OPENAI_PRICING)
+        text = re.sub(r'\s+', ' ', re.sub(r'<[^>]+>', ' ', re.sub(r'(?s)<(script|style)[^>]*>.*?</\1>', ' ', html)))
+        # 页面很大：只截取各模型名附近的文字交给模型整理
+        text = ' … '.join(text[max(0, m.start() - 80):m.end() + 300] for i in ids for m in list(re.finditer(re.escape(i), text))[:3])[:40000]
+        if not text: return {}
+        # 整理价格这一次调用用 Codex 自己的默认模型，避免“选模型需要先有模型”的循环
+        os.environ.setdefault('HYPERTHYMESIA_MODEL', providers.DEFAULT_MODEL.get('codex', ''))
+        rep = providers.call(paths.home(), PROBE_SYSTEM, '下面是 OpenAI 官方价格页的文字。只针对这些模型：' + '、'.join(ids) +
+                             '，回复 {"prices":{"模型ID":[输入价, 输出价]}}（美元/百万 token），页面里没有的模型不要列。\n' + text)
+        got = writer.parse(rep.text).get('prices', {}) or {}
+        # 写入时输入远多于输出：按 9:1 加权折成一个可比较的单价
+        return {k: float(v[0]) * 0.9 + float(v[1]) * 0.1 for k, v in got.items() if k in ids and isinstance(v, list) and len(v) == 2}
+    except Exception:
+        return {}
+    finally:
+        if os.environ.get('HYPERTHYMESIA_MODEL') == providers.DEFAULT_MODEL.get('codex', ''): os.environ.pop('HYPERTHYMESIA_MODEL', None)
+
+
+def codex_affordable(ids):
+    """价格页读不到时的退路：Codex 模型说明里标为 affordable / 低价的模型排前面。"""
+    desc = {m['slug']: (m.get('description') or '').lower() for m in _codex_cache().get('models', [])}
+    return sorted(ids, key=lambda i: (not re.search(r'affordable|cheap|low[- ]cost|easier', desc.get(i, '')), ids.index(i)))
+
+
+def prices(provider, ids, old):
+    """返回 ({模型: 价格}, 依据)；Qoder / Claude 只给缓存里没有的新模型补测，其余沿用缓存。"""
+    if provider == 'codebuddy':
+        return codebuddy_prices(), '宿主本机缓存的官方倍率'
+    if provider == 'qoder':
+        p = qoder_doc_prices(ids)
+        if p: return p, 'Qoder 官方文档倍率'
+    if provider in ('qoder', 'claude'):
+        got = {k: v for k, v in (old or {}).items() if k in ids}
+        for m in ids:
+            if m not in got:
+                c = measure(provider, m)
+                if c is not None: got[m] = c
+        return got, '极短请求实测'
+    if provider == 'codex':
+        p = codex_prices(ids)
+        return p, ('OpenAI 官方价格页' if p else '价格页读取失败，按模型说明')
+    return {}, '无'
+
+
+# ---------------------------------------------------------------- 能力试探与选择
 def _probe(provider, model):
-    """一次极小的抽取：(是否通过, 单次消耗或 None)。"""
     from . import providers, writer
     old = os.environ.get('HYPERTHYMESIA_MODEL'); os.environ['HYPERTHYMESIA_MODEL'] = model
     try:
         rep = providers.call(paths.home(), PROBE_SYSTEM, PROBE_PROMPT)
         got = {f.get('key'): str(f.get('value')) for f in writer.parse(rep.text).get('facts', [])}
-        ok = '50' in got.get('page_size', '') and 'marco' in got.get('reviewer', '').lower()
-        return ok, rep.usage.get('cost')
+        return '50' in got.get('page_size', '') and 'marco' in got.get('reviewer', '').lower()
     except Exception:
-        return False, None
+        return False
     finally:
         if old is None: os.environ.pop('HYPERTHYMESIA_MODEL', None)
         else: os.environ['HYPERTHYMESIA_MODEL'] = old
@@ -82,20 +176,28 @@ def _probe(provider, model):
 
 def choose(provider, refresh=False):
     """该提供方当前最便宜且够用的模型；识别不出时返回空串（由调用方用宿主默认模型）。"""
-    cache = _load(); c = cache.get(provider)
-    if c and not refresh and time.time() - c.get('at', 0) < TTL: return c.get('model', '')
-    cands = rank(list_models(provider))[:PROBE_TOP]
-    tried = []
-    for m in cands:
-        ok, cost = _probe(provider, m); tried.append({'model': m, 'ok': ok, 'cost': cost})
-        if ok and cost is None: break        # 宿主不报告消耗：按粗排取第一个通过的
-    good = [t for t in tried if t['ok']]
-    best = min(good, key=lambda t: (t['cost'] is None, t['cost'] or 0)) if good else None
-    cache[provider] = {'model': best['model'] if best else '', 'at': time.time(), 'tried': tried}
+    cache = _load(); c = cache.get(provider) or {}
+    ids = [i for i in list_models(provider) if not SKIP.match(i)]
+    if c and not refresh and time.time() - c.get('at', 0) < TTL and c.get('ids') == ids and c.get('model'): return c['model']
+    price, source = prices(provider, ids, c.get('prices'))
+    order = sorted([i for i in ids if i in price], key=lambda i: price[i]) + \
+            (codex_affordable([i for i in ids if i not in price]) if provider == 'codex' else [])
+    chosen = ''; checked = []
+    for m in order:
+        ok = _probe(provider, m); checked.append({'model': m, 'ok': ok})
+        if ok: chosen = m; break
+    cache[provider] = {'model': chosen, 'at': time.time(), 'ids': ids, 'prices': price, 'source': source, 'checked': checked}
     _save(cache)
-    return cache[provider]['model']
+    return chosen
+
+
+def explain(provider):
+    """给 doctor 用：选中的模型与依据。"""
+    c = _load().get(provider) or {}
+    if not c: return '尚未识别（第一次写入时自动识别）'
+    p = c.get('prices', {}).get(c.get('model'))
+    return '%s（依据：%s%s）' % (c.get('model') or '无可用模型', c.get('source', ''), '，价格 %s' % p if p is not None else '')
 
 
 def forget(provider):
-    """调用报“模型不可用”时清掉缓存，下次重新识别。"""
     cache = _load(); cache.pop(provider, None); _save(cache)

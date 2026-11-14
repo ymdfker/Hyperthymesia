@@ -58,7 +58,10 @@ def _doctor(argv):
         print('  模型：%s' % (s['model'] or '未配置（必填）'))
         print('  key：%s' % ('已从环境变量 %s 读到（不显示内容）' % var if key else '环境变量 %s 未设置' % var))
     elif s['model']:
-        print('  模型：%s' % s['model'])
+        print('  模型：%s（配置指定）' % s['model'])
+    elif s['provider'] in ('codex', 'claude', 'codebuddy', 'qoder'):
+        from . import models
+        print('  模型：%s' % models.explain(s['provider']))
     return 0 if s['provider'] else 1
 
 

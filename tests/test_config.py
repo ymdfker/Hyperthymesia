@@ -44,20 +44,40 @@ class ConfigTest(unittest.TestCase):
         with mock.patch.dict(os.environ, {'HYPERTHYMESIA_HOST_AGENT': 'codebuddy'}):
             self.assertEqual(config.writer_settings()['provider'], 'openai')
 
-    def test_model_ranking_and_choice(self):
+    def test_model_choice_by_host_price(self):
         from hyperthymesia import models
-        ids = ['auto', 'hy4free', 'deepseek-v4-pro', 'glm-5.3', 'glm-5.3-flash', 'kimi-k3.1-pro', 'custom-local:x']
-        self.assertEqual(models.rank(ids)[:2], ['hy4free', 'glm-5.3-flash'])          # 低价档在前，auto 与本地自定义不参与
-        self.assertNotIn('auto', models.rank(ids))
-        probes = {'hy4free': (False, 0.01), 'glm-5.3-flash': (True, 0.37), 'glm-5.3': (True, 0.9), 'deepseek-v4-pro': (True, 2.0)}
-        with mock.patch.object(models, 'list_models', return_value=ids), mock.patch.object(models, '_probe', side_effect=lambda p, m: probes.get(m, (False, None))):
-            self.assertEqual(models.choose('codebuddy'), 'glm-5.3-flash')                # 最便宜的没通过试探，选通过的里最便宜的
-        with mock.patch.object(models, 'list_models', side_effect=AssertionError('不应重新识别')):
-            self.assertEqual(models.choose('codebuddy'), 'glm-5.3-flash')                # 命中缓存
-        models.forget('codebuddy')
-        with mock.patch.object(models, 'list_models', return_value=['gpt-5.6-sol', 'gpt-6-luna', 'gpt-5.6-luna']), \
-             mock.patch.object(models, '_probe', return_value=(True, None)):
-            self.assertEqual(models.choose('codex'), 'gpt-6-luna')                      # 不报告消耗：按粗排取第一个通过的
+        ids = ['auto', 'deepseek-v4-pro', 'glm-5.3', 'glm-5.3-flash', 'space-bunny', 'custom-local:x']
+        price = {'deepseek-v4-pro': 0.6, 'glm-5.3': 0.69, 'glm-5.3-flash': 0.08, 'space-bunny': 0.06}
+        probed = []
+        def probe(p, m): probed.append(m); return m != 'space-bunny'          # 最便宜的没通过能力试探
+        with mock.patch.object(models, 'list_models', return_value=ids), mock.patch.object(models, 'codebuddy_prices', return_value=price), \
+             mock.patch.object(models, '_probe', side_effect=probe):
+            self.assertEqual(models.choose('codebuddy'), 'glm-5.3-flash')    # 按价格依次试探，取第一个通过的
+        self.assertEqual(probed, ['space-bunny', 'glm-5.3-flash'])            # 只试探到通过为止，不碰贵模型
+        with mock.patch.object(models, 'list_models', return_value=ids), mock.patch.object(models, 'codebuddy_prices', side_effect=AssertionError('命中缓存')):
+            self.assertEqual(models.choose('codebuddy'), 'glm-5.3-flash')
+        with mock.patch.object(models, 'list_models', return_value=ids + ['new-model']), mock.patch.object(models, 'codebuddy_prices', return_value=dict(price, **{'new-model': 0.01})), \
+             mock.patch.object(models, '_probe', return_value=True):
+            self.assertEqual(models.choose('codebuddy'), 'new-model')         # 模型列表变化：重新识别
+
+    def test_measured_prices_only_for_new_models(self):
+        from hyperthymesia import models
+        measured = []
+        def measure(p, m): measured.append(m); return {'A': 0.02, 'B': 0.005, 'C': 0.5}[m]
+        with mock.patch.object(models, 'list_models', return_value=['A', 'B']), mock.patch.object(models, 'measure', side_effect=measure), \
+             mock.patch.object(models, '_probe', return_value=True):
+            self.assertEqual(models.choose('qoder'), 'B')
+        with mock.patch.object(models, 'list_models', return_value=['A', 'B', 'C']), mock.patch.object(models, 'measure', side_effect=measure), \
+             mock.patch.object(models, '_probe', return_value=True):
+            self.assertEqual(models.choose('qoder'), 'B')
+        self.assertEqual(measured, ['A', 'B', 'C'])                          # 第二次只补测新出现的 C
+
+    def test_codebuddy_prices_from_local_cache(self):
+        from hyperthymesia import models
+        d = self.home / 'cb' / '.codebuddy' / 'local_storage'; d.mkdir(parents=True)
+        (d / 'entry_x.info').write_text('{"data":{"models":[{"id":"hy4free","credits":"x0.00"},{"id":"glm-5.3-flash","credits":"x0.08"}]}}TRAILER', encoding='utf-8')
+        with mock.patch('pathlib.Path.home', return_value=self.home / 'cb'):
+            self.assertEqual(models.codebuddy_prices(), {'hy4free': 0.0, 'glm-5.3-flash': 0.08})
 
     def test_api_key_from_named_env_only(self):
         self.cfg('[writer]\nprovider = "openai"\nmodel = "deepseek-chat"\nbase_url = "https://api.deepseek.com/v1"\napi_key_env = "DEEPSEEK_API_KEY"\n')
