@@ -37,14 +37,27 @@ class ConfigTest(unittest.TestCase):
         with mock.patch('shutil.which', return_value=None), mock.patch('hyperthymesia.install.codebuddy_exe', return_value=None):
             self.assertEqual(config.writer_settings()['provider'], '')
 
-    def test_host_agent_uses_its_own_cheap_model(self):
+    def test_host_agent_selects_its_own_provider(self):
         with mock.patch.dict(os.environ, {'HYPERTHYMESIA_HOST_AGENT': 'codebuddy'}):
-            s = config.writer_settings(); self.assertEqual((s['provider'], s['model']), ('codebuddy', 'glm-5.3-flash'))
-        with mock.patch.dict(os.environ, {'HYPERTHYMESIA_HOST_AGENT': 'claude'}):
-            self.assertEqual(config.writer_settings()['model'], 'claude-haiku-5-5')
+            s = config.writer_settings(); self.assertEqual((s['provider'], s['model']), ('codebuddy', ''))   # 模型不写死，留给自动识别
         self.cfg('[writer]\nprovider = "openai"\nmodel = "deepseek-chat"\n')    # 用户明确配置 API 时以配置为准
         with mock.patch.dict(os.environ, {'HYPERTHYMESIA_HOST_AGENT': 'codebuddy'}):
             self.assertEqual(config.writer_settings()['provider'], 'openai')
+
+    def test_model_ranking_and_choice(self):
+        from hyperthymesia import models
+        ids = ['auto', 'hy4free', 'deepseek-v4-pro', 'glm-5.3', 'glm-5.3-flash', 'kimi-k3.1-pro', 'custom-local:x']
+        self.assertEqual(models.rank(ids)[:2], ['hy4free', 'glm-5.3-flash'])          # 低价档在前，auto 与本地自定义不参与
+        self.assertNotIn('auto', models.rank(ids))
+        probes = {'hy4free': (False, 0.01), 'glm-5.3-flash': (True, 0.37), 'glm-5.3': (True, 0.9), 'deepseek-v4-pro': (True, 2.0)}
+        with mock.patch.object(models, 'list_models', return_value=ids), mock.patch.object(models, '_probe', side_effect=lambda p, m: probes.get(m, (False, None))):
+            self.assertEqual(models.choose('codebuddy'), 'glm-5.3-flash')                # 最便宜的没通过试探，选通过的里最便宜的
+        with mock.patch.object(models, 'list_models', side_effect=AssertionError('不应重新识别')):
+            self.assertEqual(models.choose('codebuddy'), 'glm-5.3-flash')                # 命中缓存
+        models.forget('codebuddy')
+        with mock.patch.object(models, 'list_models', return_value=['gpt-5.6-sol', 'gpt-6-luna', 'gpt-5.6-luna']), \
+             mock.patch.object(models, '_probe', return_value=(True, None)):
+            self.assertEqual(models.choose('codex'), 'gpt-6-luna')                      # 不报告消耗：按粗排取第一个通过的
 
     def test_api_key_from_named_env_only(self):
         self.cfg('[writer]\nprovider = "openai"\nmodel = "deepseek-chat"\nbase_url = "https://api.deepseek.com/v1"\napi_key_env = "DEEPSEEK_API_KEY"\n')

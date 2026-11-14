@@ -70,7 +70,6 @@ def writer_settings():
         found = lambda p: codebuddy_exe() if p == 'codebuddy' else shutil.which(CLI_EXE[p])   # codebuddy 可能只在 WorkBuddy 安装包里
         s['provider'] = next((p for p in AUTO_ORDER if found(p)), '')
         s['source'] = '自动选择（本机已安装的命令行）' if s['provider'] else '无可用提供方'
-    if not s['model']: s['model'] = CHEAP_MODEL.get(s['provider'], '')
     return s
 
 

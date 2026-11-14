@@ -32,7 +32,13 @@ def name():
 
 
 def model():
-    return settings()['model'] or DEFAULT_MODEL.get(name(), '')
+    """配置/环境变量指定的模型优先；否则自动识别该提供方最便宜且够用的模型（缓存一周），识别不出才用默认。"""
+    m = settings()['model']
+    if m: return m
+    if name() in ('codex', 'claude', 'codebuddy', 'qoder'):
+        from . import models
+        m = models.choose(name())
+    return m or DEFAULT_MODEL.get(name(), '')
 
 
 def _workdir(home):
@@ -85,7 +91,7 @@ def _claude(home, system, prompt, sid, log):
     u = o.get('usage', {}); cr = u.get('cache_read_input_tokens', 0)
     return Reply(o.get('session_id') or sid, o.get('result', ''),
                  {'input_tokens': u.get('input_tokens', 0) + cr + u.get('cache_creation_input_tokens', 0),
-                  'cached_input_tokens': cr, 'output_tokens': u.get('output_tokens', 0)})
+                  'cached_input_tokens': cr, 'output_tokens': u.get('output_tokens', 0), 'cost': o.get('total_cost_usd')})
 
 
 def _codebuddy(home, system, prompt, sid, log):
@@ -97,11 +103,14 @@ def _codebuddy(home, system, prompt, sid, log):
     r = subprocess.run(cmd, input=prompt, capture_output=True, text=True, encoding='utf-8', errors='replace', cwd=_workdir(home), timeout=1800)
     try: o = json.loads(r.stdout)
     except ValueError: raise ProviderError('codebuddy 输出无法解析：' + (r.stderr or r.stdout)[-400:])
-    if isinstance(o, list): o = next((x for x in reversed(o) if x.get('type') == 'result'), {})   # 输出为事件数组，取最后的结果
+    credit = None
+    if isinstance(o, list):   # 输出为事件数组：取最后的结果，消耗累加各条消息里的 credit
+        credit = sum(((x.get('providerData') or {}).get('rawUsage') or {}).get('credit') or 0 for x in o if isinstance(x, dict))
+        o = next((x for x in reversed(o) if x.get('type') == 'result'), {})
     if r.returncode or o.get('is_error'): raise ProviderError('codebuddy 调用失败：' + str(o.get('result'))[:400])
     u = o.get('usage', {}); cr = u.get('cache_read_input_tokens', 0)
     return Reply(o.get('session_id') or sid, o.get('result', ''),
-                 {'input_tokens': u.get('input_tokens', 0), 'cached_input_tokens': cr, 'output_tokens': u.get('output_tokens', 0)})
+                 {'input_tokens': u.get('input_tokens', 0), 'cached_input_tokens': cr, 'output_tokens': u.get('output_tokens', 0), 'cost': credit})
 
 
 def _openai(home, system, prompt, sid, log):
@@ -158,7 +167,7 @@ def _qoder(home, system, prompt, sid, log):
     u = o.get('usage', {}); cr = u.get('cache_read_input_tokens', 0)
     return Reply(o.get('session_id') or sid, o.get('result', ''),
                  {'input_tokens': u.get('input_tokens', 0) + cr + u.get('cache_creation_input_tokens', 0), 'cached_input_tokens': cr,
-                  'output_tokens': u.get('output_tokens', 0), 'credits': o.get('total_credits', 0)})
+                  'output_tokens': u.get('output_tokens', 0), 'cost': o.get('total_credits')})
 
 
 def _dsh(home, system, prompt, sid, log):
