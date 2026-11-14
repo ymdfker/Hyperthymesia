@@ -5,7 +5,7 @@ from unittest import mock
 
 from agent_memory import changes, paths
 from agent_memory.redact import redact
-from agent_memory.store import Store, state
+from agent_memory.store import close_all, Store, state
 
 
 class TmpHome(unittest.TestCase):
@@ -13,7 +13,7 @@ class TmpHome(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory(); self.root = Path(self.tmp.name)
         self.env = mock.patch.dict(os.environ, {'AGENT_MEMORY_HOME': str(self.root / 'home')}); self.env.start()
     def tearDown(self):
-        self.env.stop(); self.tmp.cleanup()
+        self.env.stop(); close_all(); self.tmp.cleanup()
 
 
 class PathsTest(TmpHome):
@@ -90,10 +90,10 @@ class ChangesTest(TmpHome):
 
     def _edit(self, ws):
         def go():
-            (ws / 'config.py').write_text('TIMEOUT = 30\nDB_URL = "postgres://admin:hunter2pass@db.local/inv"\n')
-            (ws / '.env').write_text('OPENAI_API_KEY=sk-proj-abcdefghijklmnopqrstuvwx1234\n')
-            (ws / 'app.log').write_text('noise\n'); (ws / 'node_modules').mkdir(); (ws / 'node_modules' / 'x.js').write_text('y\n')
-            (ws / 'notes.md').write_text('new\n')
+            (ws / 'config.py').write_text('TIMEOUT = 30\nDB_URL = "postgres://admin:hunter2pass@db.local/inv"\n', encoding='utf-8')
+            (ws / '.env').write_text('OPENAI_API_KEY=sk-proj-abcdefghijklmnopqrstuvwx1234\n', encoding='utf-8')
+            (ws / 'app.log').write_text('noise\n', encoding='utf-8'); (ws / 'node_modules').mkdir(); (ws / 'node_modules' / 'x.js').write_text('y\n', encoding='utf-8')
+            (ws / 'notes.md').write_text('new\n', encoding='utf-8')
         return go
 
     def _check(self, block):
@@ -103,24 +103,24 @@ class ChangesTest(TmpHome):
 
     def test_git_shadow_mode_leaves_user_repo_alone(self):
         if not changes.has_git(): self.skipTest('git not installed')
-        ws = self.root / 'ws'; ws.mkdir(); (ws / 'config.py').write_text('TIMEOUT = 10\n')
+        ws = self.root / 'ws'; ws.mkdir(); (ws / 'config.py').write_text('TIMEOUT = 10\n', encoding='utf-8')
         subprocess.run(['git', 'init', '-q', str(ws)], check=True)
         subprocess.run(['git', '-C', str(ws), 'add', 'config.py'], check=True)
         before = subprocess.run(['git', '-C', str(ws), 'status', '--porcelain'], capture_output=True, text=True).stdout
         block = self._turn(ws, self._edit(ws)); self._check(block)
-        (ws / 'config.py').write_text('TIMEOUT = 10\n')
+        (ws / 'config.py').write_text('TIMEOUT = 10\n', encoding='utf-8')
         for p in ('notes.md', 'app.log', '.env'): (ws / p).unlink()
         import shutil; shutil.rmtree(ws / 'node_modules')
         after = subprocess.run(['git', '-C', str(ws), 'status', '--porcelain'], capture_output=True, text=True).stdout
         self.assertEqual(before, after)
 
     def test_file_snapshot_mode_without_git(self):
-        ws = self.root / 'ws2'; ws.mkdir(); (ws / 'config.py').write_text('TIMEOUT = 10\n')
+        ws = self.root / 'ws2'; ws.mkdir(); (ws / 'config.py').write_text('TIMEOUT = 10\n', encoding='utf-8')
         with mock.patch.object(changes, 'has_git', return_value=False):
             self._check(self._turn(ws, self._edit(ws)))
 
     def test_no_change_gives_empty_block(self):
-        ws = self.root / 'ws3'; ws.mkdir(); (ws / 'a.py').write_text('x = 1\n')
+        ws = self.root / 'ws3'; ws.mkdir(); (ws / 'a.py').write_text('x = 1\n', encoding='utf-8')
         self.assertEqual(self._turn(ws, lambda: None), '')
 
 

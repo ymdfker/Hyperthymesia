@@ -49,7 +49,15 @@ COMMANDS['uninstall'] = (_uninstall, '移除本框架写入的配置：uninstall
 COMMANDS['context'] = (_context, '打印当前目录会注入的记忆（调试用）')
 
 
+def _utf8_stdio():
+    """Windows 的标准输入输出默认是本地代码页，宿主和 MCP 客户端传的是 UTF-8：统一改成 UTF-8。"""
+    for s in (sys.stdin, sys.stdout, sys.stderr):
+        try: s.reconfigure(encoding='utf-8', errors='replace')
+        except (AttributeError, ValueError): pass
+
+
 def main(argv=None):
+    _utf8_stdio()
     argv = list(sys.argv[1:] if argv is None else argv)
     if not argv or argv[0] in ('-h', '--help', 'help'):
         print('agent-memory %s\ncommands:' % __version__)

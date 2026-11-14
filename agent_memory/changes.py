@@ -37,7 +37,7 @@ def _shadow(home, cwd):
     ex = d / 'info' / 'exclude'; lines = list(EXCLUDE)
     try: lines.append('/' + Path(home).resolve().relative_to(Path(cwd).resolve()).as_posix() + '/')   # 记忆目录在工作区内时排除它
     except ValueError: pass
-    if not ex.exists() or ex.read_text() != '\n'.join(lines) + '\n': ex.write_text('\n'.join(lines) + '\n')
+    if not ex.exists() or ex.read_text(encoding='utf-8') != '\n'.join(lines) + '\n': ex.write_text('\n'.join(lines) + '\n', encoding='utf-8')
     return d
 
 
@@ -96,14 +96,14 @@ def _file_snapshot(home, cwd):
             files[p.relative_to(cwd).as_posix()] = b.decode('utf-8', 'replace')
     sid = hashlib.sha1(json.dumps(files, sort_keys=True).encode()).hexdigest()[:16]
     d = Path(home) / 'snapshots' / _key(cwd); d.mkdir(parents=True, exist_ok=True)
-    (d / (sid + '.json')).write_text(json.dumps(files, ensure_ascii=False))
+    (d / (sid + '.json')).write_text(json.dumps(files, ensure_ascii=False), encoding='utf-8')
     return 'file:' + sid
 
 
 def _file_diff(home, cwd, a, b):
     if a == b: return '', ''
     d = Path(home) / 'snapshots' / _key(cwd)
-    A = json.loads((d / (a[5:] + '.json')).read_text()); B = json.loads((d / (b[5:] + '.json')).read_text())
+    A = json.loads((d / (a[5:] + '.json')).read_text(encoding='utf-8')); B = json.loads((d / (b[5:] + '.json')).read_text(encoding='utf-8'))
     out = []; stat = []
     for path in sorted(set(A) | set(B)):
         x, y = A.get(path, ''), B.get(path, '')

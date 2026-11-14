@@ -4,7 +4,7 @@ from pathlib import Path
 from unittest import mock
 
 from agent_memory import reader
-from agent_memory.store import Store, state
+from agent_memory.store import close_all, Store, state
 
 
 class ReaderTest(unittest.TestCase):
@@ -17,7 +17,7 @@ class ReaderTest(unittest.TestCase):
         self.cfg = self.p.add_object('配置'); self.f2 = self.p.add_fact([self.cfg], '低库存阈值为10')
         self.stores = {'u': self.u, 'p': self.p}
 
-    def tearDown(self): self.tmp.cleanup()
+    def tearDown(self): close_all(); self.tmp.cleanup()
 
     def test_snapshot_full_then_incremental_then_stale(self):
         c1 = reader.context(self.stores, self.st, 's1')
@@ -58,7 +58,7 @@ class ReaderTest(unittest.TestCase):
                 {'jsonrpc': '2.0', 'id': 2, 'method': 'tools/list'},
                 {'jsonrpc': '2.0', 'id': 3, 'method': 'tools/call', 'params': {'name': 'memory_read_objects', 'arguments': {'object_ids': ['u1']}}}]
         r = subprocess.run([sys.executable, '-m', 'agent_memory', 'serve'], input='\n'.join(json.dumps(x) for x in reqs) + '\n',
-                           capture_output=True, text=True, env=env, cwd=root, timeout=60)
+                           capture_output=True, text=True, encoding='utf-8', env=env, cwd=root, timeout=60)
         out = [json.loads(l) for l in r.stdout.splitlines()]
         self.assertEqual([o['id'] for o in out], [1, 2, 3])
         self.assertEqual(out[0]['result']['protocolVersion'], '2025-06-18')

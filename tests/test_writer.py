@@ -4,7 +4,7 @@ from pathlib import Path
 from unittest import mock
 
 from agent_memory import providers, writer
-from agent_memory.store import Store, state
+from agent_memory.store import close_all, Store, state
 
 
 def J(**kw): return json.dumps(kw, ensure_ascii=False)
@@ -18,7 +18,7 @@ class WriterTest(unittest.TestCase):
         providers.FAKE_REPLIES.clear()
 
     def tearDown(self):
-        self.env.stop(); self.tmp.cleanup(); providers.FAKE_REPLIES.clear()
+        self.env.stop(); close_all(); self.tmp.cleanup(); providers.FAKE_REPLIES.clear()
 
     def turns(self, *pairs):
         return [{'session': 's1', 'turn': i, 'user': u, 'assistant': a, 'at': '2026-11-14'} for i, (u, a) in enumerate(pairs, 1)]

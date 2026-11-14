@@ -53,5 +53,5 @@ def project_db(cwd):
     key = project_key(root)
     meta = d / (key + '.json')
     if not meta.exists():
-        meta.write_text(json.dumps({'root': str(root)}, ensure_ascii=False))
+        meta.write_text(json.dumps({'root': str(root)}, ensure_ascii=False), encoding='utf-8')
     return d / (key + '.db'), root

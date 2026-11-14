@@ -37,12 +37,22 @@ CREATE TABLE IF NOT EXISTS delivered(session TEXT NOT NULL, store TEXT NOT NULL,
 """
 
 
+_OPEN = []   # 本进程打开的连接；测试结束时 close_all() 关闭（Windows 上未关闭的数据库文件无法删除）
+
+
+def close_all():
+    while _OPEN:
+        try: _OPEN.pop().close()
+        except Exception: pass
+
+
 def connect(path, schema=SCHEMA):
     path = Path(path); path.parent.mkdir(parents=True, exist_ok=True)
     db = sqlite3.connect(str(path), timeout=30, isolation_level=None)   # 由 tx() 显式 BEGIN/COMMIT
     db.row_factory = sqlite3.Row
     db.execute('PRAGMA journal_mode=WAL'); db.execute('PRAGMA foreign_keys=ON')
     db.executescript(schema)
+    _OPEN.append(db)
     return db
 
 

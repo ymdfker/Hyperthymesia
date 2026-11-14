@@ -4,7 +4,7 @@ from pathlib import Path
 from unittest import mock
 
 from agent_memory import hooks, install, paths, providers, writecmd
-from agent_memory.store import Store, state
+from agent_memory.store import close_all, Store, state
 
 
 class HookFlowTest(unittest.TestCase):
@@ -12,11 +12,11 @@ class HookFlowTest(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory(); self.root = Path(self.tmp.name)
         self.env = mock.patch.dict(os.environ, {'AGENT_MEMORY_HOME': str(self.root / 'home'), 'AGENT_MEMORY_PROVIDER': 'fake',
                                                 'AGENT_MEMORY_BACKLOG_TOKENS': '100000'}); self.env.start()
-        self.proj = self.root / 'proj'; self.proj.mkdir(); (self.proj / 'config.py').write_text('PAGE = 10\n')
+        self.proj = self.root / 'proj'; self.proj.mkdir(); (self.proj / 'config.py').write_text('PAGE = 10\n', encoding='utf-8')
         providers.FAKE_REPLIES.clear()
         self.spawn = mock.patch.object(hooks, 'spawn_writer'); self.spawned = self.spawn.start()   # 测试里不真的拉起后台写入
 
-    def tearDown(self): self.spawn.stop(); self.env.stop(); self.tmp.cleanup(); providers.FAKE_REPLIES.clear()
+    def tearDown(self): self.spawn.stop(); self.env.stop(); close_all(); self.tmp.cleanup(); providers.FAKE_REPLIES.clear()
 
     def call(self, event, d, agent='claude'):
         with mock.patch('sys.stdin', io.StringIO(json.dumps(d))), mock.patch('sys.stdout', new_callable=io.StringIO) as out:
@@ -29,12 +29,12 @@ class HookFlowTest(unittest.TestCase):
                 {'type': 'assistant', 'message': {'content': [{'type': 'tool_use', 'name': 'Edit'}]}},
                 {'type': 'user', 'message': {'content': [{'type': 'tool_result', 'content': 'ok'}]}},
                 {'type': 'assistant', 'message': {'content': [{'type': 'text', 'text': reply}]}}]
-        p.write_text('\n'.join(json.dumps(r, ensure_ascii=False) for r in rows)); return str(p)
+        p.write_text('\n'.join(json.dumps(r, ensure_ascii=False) for r in rows), encoding='utf-8'); return str(p)
 
     def test_turn_backlog_changes_and_write(self):
         d = {'session_id': 's1', 'cwd': str(self.proj), 'prompt': '默认分页改成20，你直接改。'}
         self.assertEqual(self.call('prompt-submit', d), {})                     # 库还是空的：不注入
-        (self.proj / 'config.py').write_text('PAGE = 20\n')
+        (self.proj / 'config.py').write_text('PAGE = 20\n', encoding='utf-8')
         self.call('stop', {'session_id': 's1', 'cwd': str(self.proj), 'transcript_path': self.transcript(d['prompt'], 'done')})
         self.call('stop', {'session_id': 's1', 'cwd': str(self.proj)})          # 重复 Stop 不重复记
         st = state(paths.home()); r = st.execute('SELECT * FROM backlog').fetchall()
@@ -60,13 +60,13 @@ class HookFlowTest(unittest.TestCase):
         with mock.patch('sys.stdin', io.StringIO('not json')), mock.patch('sys.stdout', new_callable=io.StringIO) as out:
             self.assertEqual(hooks.run(['stop']), 0)
         self.assertEqual(out.getvalue(), '{}')
-        self.assertIn('hook_error', (paths.home() / 'logs' / 'hooks.log').read_text())
+        self.assertIn('hook_error', (paths.home() / 'logs' / 'hooks.log').read_text(encoding='utf-8'))
 
     def test_codex_final_reply(self):
         p = self.root / 'rollout.jsonl'
         rows = [{'type': 'response_item', 'payload': {'type': 'message', 'role': 'assistant', 'content': [{'type': 'output_text', 'text': '我先看看文件'}]}},
                 {'type': 'event_msg', 'payload': {'type': 'task_complete', 'last_agent_message': 'done'}}]
-        p.write_text('\n'.join(json.dumps(r) for r in rows))
+        p.write_text('\n'.join(json.dumps(r) for r in rows), encoding='utf-8')
         self.assertEqual(hooks._codex_final(str(p)), 'done')
 
     def test_writer_lock(self):
@@ -80,27 +80,27 @@ class InstallTest(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory(); self.home = Path(self.tmp.name)
         self.env = mock.patch.dict(os.environ, {'HOME': str(self.home)}); self.env.start()
 
-    def tearDown(self): self.env.stop(); self.tmp.cleanup()
+    def tearDown(self): self.env.stop(); close_all(); self.tmp.cleanup()
 
     def test_claude_install_keeps_user_config_and_uninstall_restores(self):
         sp = self.home / '.claude' / 'settings.json'; sp.parent.mkdir()
         mine = {'model': 'opus', 'hooks': {'Stop': [{'hooks': [{'type': 'command', 'command': 'my-own-hook'}]}]}}
-        sp.write_text(json.dumps(mine)); (self.home / '.claude.json').write_text(json.dumps({'mcpServers': {'other': {'command': 'x'}}}))
+        sp.write_text(json.dumps(mine), encoding='utf-8'); (self.home / '.claude.json').write_text(json.dumps({'mcpServers': {'other': {'command': 'x'}}}), encoding='utf-8')
         install.claude(); install.claude()                                   # 重复安装不重复添加
-        s = json.loads(sp.read_text()); m = json.loads((self.home / '.claude.json').read_text())
+        s = json.loads(sp.read_text(encoding='utf-8')); m = json.loads((self.home / '.claude.json').read_text(encoding='utf-8'))
         self.assertEqual(s['model'], 'opus'); self.assertEqual(len(s['hooks']['Stop']), 2)
         self.assertIn('hook stop --agent claude', json.dumps(s, ensure_ascii=False)); self.assertIn('hyperthymesia', m['mcpServers']); self.assertIn('other', m['mcpServers'])
         self.assertTrue((self.home / '.claude' / 'settings.json.hyperthymesia.bak').exists())
         install.claude(remove=True)
-        self.assertEqual(json.loads(sp.read_text()), mine)
-        self.assertEqual(json.loads((self.home / '.claude.json').read_text()), {'mcpServers': {'other': {'command': 'x'}}})
+        self.assertEqual(json.loads(sp.read_text(encoding='utf-8')), mine)
+        self.assertEqual(json.loads((self.home / '.claude.json').read_text(encoding='utf-8')), {'mcpServers': {'other': {'command': 'x'}}})
 
     def test_codex_block_append_and_remove(self):
-        cp = self.home / '.codex' / 'config.toml'; cp.parent.mkdir(); cp.write_text('model = "gpt-5.6-sol"\n')
+        cp = self.home / '.codex' / 'config.toml'; cp.parent.mkdir(); cp.write_text('model = "gpt-5.6-sol"\n', encoding='utf-8')
         install.codex(); install.codex()
-        t = cp.read_text(); self.assertEqual(t.count(install.MARK_BEGIN), 1); self.assertIn('[mcp_servers.hyperthymesia]', t); self.assertIn('[[hooks.Stop]]', t)
+        t = cp.read_text(encoding='utf-8'); self.assertEqual(t.count(install.MARK_BEGIN), 1); self.assertIn('[mcp_servers.hyperthymesia]', t); self.assertIn('[[hooks.Stop]]', t)
         install.codex(remove=True)
-        self.assertEqual(cp.read_text(), 'model = "gpt-5.6-sol"\n')
+        self.assertEqual(cp.read_text(encoding='utf-8'), 'model = "gpt-5.6-sol"\n')
 
 
 if __name__ == '__main__':
