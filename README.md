@@ -1,6 +1,6 @@
 # Hyperthymesia
 
-给 AI agent 用的长期记忆。接入后，你在 Claude Code、Codex、WorkBuddy、Qoder、Trae 里说过的事实、做过的决定、
+给 AI agent 用的长期记忆。接入后，你在 Claude Code、Codex、WorkBuddy、Qoder 里说过的事实、做过的决定、
 代码里定下的约定，新开会话时 agent 依然记得，不用再交代一遍。
 
 - 记忆存在你电脑上（`~/.hyperthymesia/`），不上传；密码、密钥会先遮盖。
@@ -11,7 +11,7 @@
 
 ### 第 1 步：安装并接入（一行命令）
 
-把命令末尾的 `claude` 换成你用的 agent：`claude`、`codex`、`workbuddy`、`qoder`、`trae`；用多个就空格隔开写多个。
+把命令末尾的 `claude` 换成你用的 agent：`claude`、`codex`、`workbuddy`、`qoder`；用多个就空格隔开写多个。
 
 **macOS / Linux**：打开“终端”，粘贴执行：
 
@@ -34,7 +34,6 @@ $env:HY_AGENTS="claude"; irm https://github.com/ymdfker/Hyperthymesia/releases/l
 | Claude Code、WorkBuddy | 无 |
 | Codex | 在 Codex 里输入 `/hooks`，批准 hyperthymesia |
 | Qoder | 按屏幕提示执行一次 `qodercli login` |
-| Trae | 在 Trae“设置 → Hooks”打开开关；再按下文“用 API key 整理记忆”配一个 key（Trae 暂不支持用自身额度整理） |
 
 ### 第 3 步：重启 agent
 
@@ -61,7 +60,7 @@ hyperthymesia import --agent claude --session 会话编号
 
 **只在某个项目里试用**：`hyperthymesia install claude --project 项目目录`。
 
-**用 API key 整理记忆**（Trae 用户必做；其他 agent 用户不需要，会自动沿用 agent 里已配的 key）：
+**用 API key 整理记忆**（一般不需要：会自动沿用 agent 里已配的 key；只有想让整理走另一个 API 时才配）：
 新建 `~/.hyperthymesia/config.toml`，写入：
 
 ```toml
