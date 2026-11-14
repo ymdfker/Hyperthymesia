@@ -139,28 +139,56 @@ def qoder(project=None, remove=False):
     return [sp, mp]
 
 
+def _run_quiet(cmd, **kw):
+    import subprocess
+    try: return subprocess.run(cmd, capture_output=True, text=True, timeout=600, **kw)
+    except (OSError, subprocess.SubprocessError): return None
+
+
 def qoder_writer_check():
     """Qoder 桌面版不带命令行：写入要用 Qoder 自己的额度，需要官方 qodercli 并登录一次（不复用桌面版登录，已实测）。
-    只在用户执行 install qoder 时检查和询问，不用 Qoder 的用户永远不会装它。返回给用户看的提示。"""
-    import subprocess
+    只在用户执行 install qoder 时检查；没装就直接默认安装（用户要求），不用 Qoder 的用户永远不会装它。返回给用户看的提示。"""
     exe = shutil.which('qodercli')
     if not exe:
         npm = shutil.which('npm')
-        if npm and sys.stdin.isatty():
-            ans = input('写入记忆要用 Qoder 的额度，需要安装官方命令行 qodercli（npm 包 @qoder-ai/qodercli，约 70MB）。现在安装？[y/N] ')
-            if ans.strip().lower() in ('y', 'yes'):
-                subprocess.run([npm, 'install', '-g', '@qoder-ai/qodercli'], check=False)
-                exe = shutil.which('qodercli')
+        if npm:
+            print('正在安装 Qoder 官方命令行 qodercli（npm 包 @qoder-ai/qodercli），用于以 Qoder 额度整理记忆……')
+            _run_quiet([npm, 'install', '-g', '@qoder-ai/qodercli']); exe = shutil.which('qodercli')
         if not exe:
-            return ('未安装 qodercli：记忆可以读取，但写入无法使用 Qoder 额度。安装：npm install -g @qoder-ai/qodercli，'
-                    '然后执行 qodercli login；或在 ~/.hyperthymesia/config.toml 里配置自己的 API key。')
-    try:
-        st = json.loads(subprocess.run([exe, 'status', '--output', 'json'], capture_output=True, text=True, timeout=60).stdout or '{}')
-    except (ValueError, subprocess.SubprocessError, OSError):
-        st = {}
+            return ('未能安装 qodercli（需要 npm）：记忆可以读取，但写入无法使用 Qoder 额度。可手动执行 npm install -g @qoder-ai/qodercli，'
+                    '然后 qodercli login；或在 ~/.hyperthymesia/config.toml 里配置自己的 API key。')
+    from .providers import qodercli_cmd
+    r = _run_quiet((qodercli_cmd() or [exe]) + ['status', '--output', 'json'])
+    try: st = json.loads(r.stdout or '{}') if r else {}
+    except ValueError: st = {}
     if not st.get('logged_in'):
-        return 'qodercli 已安装但未登录：请执行一次 qodercli login（浏览器授权），之后写入会自动使用你的 Qoder 额度。'
+        return '还需要登录一次：执行 qodercli login（浏览器授权），之后写入会自动使用你的 Qoder 额度。'
     return 'qodercli 已登录：写入将使用你的 Qoder 额度。'
+
+
+def traecli_path():
+    """TRAE 官方命令行：PATH 上的 traecli，或官方安装脚本的默认位置 ~/.local/bin/traecli。"""
+    p = shutil.which('traecli') or str(Path(os.environ.get('HOME') or Path.home()) / '.local' / 'bin' / 'traecli')
+    return p if Path(p).exists() else None
+
+
+def trae_writer_check():
+    """Trae 桌面版不带命令行：写入要用 Trae 自己的额度，需要官方 TRAE CLI（traecli）。只在 install trae 时检查，没装就默认安装。"""
+    if not traecli_path():
+        print('正在安装 TRAE 官方命令行 traecli（官方安装脚本 trae.cn/trae-cli/install.sh），用于以 Trae 额度整理记忆……')
+        if os.name == 'nt':
+            _run_quiet(['powershell', '-NoProfile', '-Command', 'irm https://trae.cn/trae-cli/install.ps1 | iex'])
+        else:
+            # 把安装目录预先放进 PATH：官方脚本发现已在 PATH 中就不会改写用户的 shell 配置文件；本框架按绝对路径调用它
+            env = dict(os.environ, PATH=str(Path(os.environ.get('HOME') or Path.home()) / '.local' / 'bin') + os.pathsep + os.environ.get('PATH', ''))
+            _run_quiet(['sh', '-c', 'curl -fsSL https://trae.cn/trae-cli/install.sh | bash'], env=env)
+        if not traecli_path():
+            return '未能安装 traecli：记忆可以读取，但写入无法使用 Trae 额度。可手动安装（见 docs.trae.cn/cli），或在配置里使用自己的 API key。'
+    r = _run_quiet([traecli_path(), 'models', '--json'])
+    if not r or not (r.stdout or '').strip() or r.stdout.strip() in ('[]', 'null'):
+        return '还需要登录一次：在终端运行 traecli，按提示登录 Trae 账号（之后写入会自动使用你的 Trae 额度）。'
+    return 'traecli 可用：写入将使用你的 Trae 额度。'
+
 
 
 TRAE_EVENTS = {'UserPromptSubmit': 'prompt-submit', 'Stop': 'stop', 'SessionStart': 'session-start'}   # Trae 没有压缩前、会话结束事件
@@ -202,6 +230,7 @@ def run(argv, remove=False):
     print(('已移除' if remove else '已写入') + '：' + '、'.join(str(f) for f in files))
     if argv[0] == 'trae' and not remove:
         print('请在 Trae 的“设置 → Hooks”里打开钩子开关，并重启 Trae（新钩子默认不运行）。')
+        print(trae_writer_check())
     if argv[0] == 'qoder' and not remove:
         print(qoder_writer_check())
     if argv[0] == 'codex' and not remove:
