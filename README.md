@@ -9,61 +9,57 @@
 
 ## 接入步骤（约 3 分钟）
 
-### 第 1 步：下载
+### 第 1 步：安装并接入（一行命令）
 
-打开 [Actions 构建记录](https://github.com/ymdfker/Hyperthymesia/actions)，点最新一条绿色对勾的构建，
-在页面底部 Artifacts 里下载你系统对应的压缩包（`hyperthymesia-macOS` / `hyperthymesia-Windows` / `hyperthymesia-Linux`），解压。
+把命令末尾的 `claude` 换成你用的 agent：`claude`、`codex`、`workbuddy`、`qoder`、`trae`；用多个就空格隔开写多个。
 
-### 第 2 步：放好文件
-
-**macOS / Linux**：打开终端，执行（假设解压在“下载”目录）：
+**macOS / Linux**：打开“终端”，粘贴执行：
 
 ```bash
-mkdir -p ~/bin && mv ~/Downloads/hyperthymesia ~/bin/ && chmod +x ~/bin/hyperthymesia
+curl -fsSL https://github.com/ymdfker/Hyperthymesia/releases/latest/download/install.sh | sh -s -- claude
 ```
 
-macOS 第一次运行如提示“无法验证开发者”：系统设置 → 隐私与安全性 → 点“仍要打开”。
+**Windows**：打开 PowerShell，粘贴执行（多个 agent 用逗号隔开，如 `"claude,codex"`）：
 
-**Windows**：把 `hyperthymesia.exe` 放到 `C:\Users\你的用户名\bin\`。弹出 SmartScreen 时点“更多信息 → 仍要运行”。
+```powershell
+$env:HY_AGENTS="claude"; irm https://github.com/ymdfker/Hyperthymesia/releases/latest/download/install.ps1 | iex
+```
 
-### 第 3 步：接入你的 agent
+不需要安装 Python 或其他环境。
 
-在终端执行下面对应的一行（Windows 把 `~/bin/hyperthymesia` 换成 `%USERPROFILE%\bin\hyperthymesia.exe`）：
+### 第 2 步：按 agent 补一步（没列出的跳过）
 
-| 你用的 agent | 执行 | 之后还要做 |
-|---|---|---|
-| Claude Code | `~/bin/hyperthymesia install claude` | 无 |
-| WorkBuddy | `~/bin/hyperthymesia install workbuddy` | 无 |
-| Codex | `~/bin/hyperthymesia install codex` | 在 Codex 里输入 `/hooks`，批准 hyperthymesia |
-| Qoder | `~/bin/hyperthymesia install qoder` | 按屏幕提示执行一次 `qodercli login` |
-| Trae | `~/bin/hyperthymesia install trae` | 在 Trae“设置 → Hooks”打开开关；再按下文“用 API key 整理记忆”配一个 key（Trae 暂不支持用自身额度整理） |
+| 你用的 agent | 还要做 |
+|---|---|
+| Claude Code、WorkBuddy | 无 |
+| Codex | 在 Codex 里输入 `/hooks`，批准 hyperthymesia |
+| Qoder | 按屏幕提示执行一次 `qodercli login` |
+| Trae | 在 Trae“设置 → Hooks”打开开关；再按下文“用 API key 整理记忆”配一个 key（Trae 暂不支持用自身额度整理） |
 
-用多个 agent 就每个执行一次。
-
-### 第 4 步：重启 agent
+### 第 3 步：重启 agent
 
 完全退出再打开。之后正常使用即可，什么都不用管。
 
-### 第 5 步（可选）：检查
+### 第 4 步（可选）：检查
 
 ```bash
-~/bin/hyperthymesia doctor
+hyperthymesia doctor
 ```
 
-看到“写入提供方”后面有 agent 名和模型名，就说明接入成功。
+看到“写入提供方”后面有 agent 名和模型名，就说明接入成功。（提示找不到命令时，用完整路径 `~/.local/bin/hyperthymesia`，Windows 为 `%USERPROFILE%\.hyperthymesia\bin\hyperthymesia.exe`。）
 
 ## 可选操作
 
 **让 agent 记得接入之前的聊天**：
 
 ```bash
-~/bin/hyperthymesia import --list
-~/bin/hyperthymesia import --agent claude --session 会话编号
+hyperthymesia import --list
+hyperthymesia import --agent claude --session 会话编号
 ```
 
 （`--all --days 7` 导入最近 7 天全部会话；只能补回对话，补不回当时的代码改动。）
 
-**只在某个项目里试用**：第 3 步命令末尾加 `--project 项目目录`。
+**只在某个项目里试用**：`hyperthymesia install claude --project 项目目录`。
 
 **用 API key 整理记忆**（Trae 用户必做；其他 agent 用户不需要，会自动沿用 agent 里已配的 key）：
 新建 `~/.hyperthymesia/config.toml`，写入：
@@ -76,7 +72,7 @@ base_url = "https://api.deepseek.com/v1"
 api_key_env = "DEEPSEEK_API_KEY"         # 只写环境变量名，key 本身放在环境变量里，本工具不保存
 ```
 
-**卸载**：`~/bin/hyperthymesia uninstall claude`（还原原配置）。删除 `~/.hyperthymesia/` 即清空全部记忆。
+**卸载**：`hyperthymesia uninstall claude`（还原原配置）。删除 `~/.hyperthymesia/` 即清空全部记忆。
 
 ## 常用命令
 
@@ -98,4 +94,4 @@ agent 的最终回复和本轮代码改动；积压够多或会话结束时，�
 ## 开发
 
 - 只用 Python 标准库；测试：`python3 -m unittest discover -s tests -v`
-- 推送到 main 后，GitHub Actions 在三系统上测试、用 PyInstaller 打出单文件并冒烟测试。
+- 推送到 main 后，GitHub Actions 在各系统上测试、用 PyInstaller 打出单文件并冒烟测试；推送 `v*` 标签时自动发布到 Releases。

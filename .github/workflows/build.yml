@@ -1,8 +1,10 @@
-# 每次推送：在 macOS 与 Windows 上跑单元测试，打包单个可执行文件，并对产物做冒烟测试。
+# 每次推送：在各系统上跑单元测试，打包单个可执行文件，并对产物做冒烟测试。
+# 推送 v* 标签时再把各系统产物发布到 GitHub Releases（install.sh / install.ps1 从 latest 下载）。
 name: build
 on:
   push:
     branches: [main]
+    tags: ['v*']
   pull_request:
   workflow_dispatch:
 jobs:
@@ -10,7 +12,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, windows-latest, ubuntu-latest]
+        include:
+          - {os: macos-latest, asset: hyperthymesia-macos-arm64}
+          - {os: macos-15-intel, asset: hyperthymesia-macos-x64}
+          - {os: ubuntu-latest, asset: hyperthymesia-linux-x64}
+          - {os: windows-latest, asset: hyperthymesia-windows-x64.exe}
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -25,7 +31,26 @@ jobs:
         run: python -m PyInstaller --onefile --name hyperthymesia --add-data "hyperthymesia/rules/writer.txt${{ runner.os == 'Windows' && ';' || ':' }}hyperthymesia/rules" --clean --noconfirm packaging/entry.py
       - name: 冒烟测试产物
         run: python packaging/smoke.py dist/hyperthymesia${{ runner.os == 'Windows' && '.exe' || '' }}
+      - name: 按发布名改名
+        shell: bash
+        run: mv dist/hyperthymesia${{ runner.os == 'Windows' && '.exe' || '' }} dist/${{ matrix.asset }}
       - uses: actions/upload-artifact@v4
         with:
-          name: hyperthymesia-${{ runner.os }}
-          path: dist/hyperthymesia*
+          name: ${{ matrix.asset }}
+          path: dist/${{ matrix.asset }}
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: assets
+          merge-multiple: true
+      - name: 发布到 Releases（连同安装脚本）
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" assets/* install.sh install.ps1 --title "$GITHUB_REF_NAME" --generate-notes
