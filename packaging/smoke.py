@@ -3,6 +3,7 @@
 import json, os, subprocess, sys, tempfile
 from pathlib import Path
 
+sys.stdout.reconfigure(encoding='utf-8')   # 脚本自己的输出也用 UTF-8（Windows 默认是本地代码页）
 exe = str(Path(sys.argv[1]).resolve())
 tmp = Path(tempfile.mkdtemp())
 env = dict(os.environ, AGENT_MEMORY_HOME=str(tmp / 'home'), HOME=str(tmp / 'userhome'), USERPROFILE=str(tmp / 'userhome'))
