@@ -50,9 +50,22 @@ def _codex_final(transcript):
     return last or msg
 
 
+def _codebuddy_final(transcript):
+    """CodeBuddy（WorkBuddy 内置）会话记录：type=message、role=assistant 的 output_text；Stop 输入里通常已带 last_assistant_message。"""
+    last = ''
+    for l in Path(transcript).read_text(encoding='utf-8', errors='replace').splitlines():
+        try: e = json.loads(l)
+        except ValueError: continue
+        if e.get('type') == 'message' and e.get('role') == 'assistant':
+            t = '\n'.join(c.get('text', '') for c in e.get('content') or [] if isinstance(c, dict) and c.get('type') == 'output_text')
+            if t.strip(): last = t
+    return last
+
+
 ADAPTERS = {
     # 宿主名: (取最终回复的函数, 注入输出格式)
     'claude': (_claude_final, lambda event, ctx: {'hookSpecificOutput': {'hookEventName': 'UserPromptSubmit', 'additionalContext': ctx}} if ctx else {}),
+    'codebuddy': (_codebuddy_final, lambda event, ctx: {'hookSpecificOutput': {'hookEventName': 'UserPromptSubmit', 'additionalContext': ctx}} if ctx else {}),
     'codex': (_codex_final, lambda event, ctx: {'hookSpecificOutput': {'hookEventName': 'UserPromptSubmit', 'additionalContext': ctx}} if ctx else {}),
 }
 
@@ -85,12 +98,11 @@ def on_stop(d, agent):
     diff = numstat = ''
     if r['project'] and (r['diff'] or '').startswith('tree:') and r['diff'][5:]:
         end = changes.snapshot(paths.home(), r['project']); diff, numstat = changes.diff(paths.home(), r['project'], r['diff'][5:], end)
-    final = ''
+    final = d.get('last_assistant_message') or ''   # 宿主直接给了最终回复（CodeBuddy 等）就不必解析会话记录
     tp = d.get('transcript_path')
-    if tp and Path(tp).exists():
+    if not final and tp and Path(tp).exists():
         try: final = ADAPTERS[agent][0](tp)
         except Exception as exc: _log('final_reply_failed', str(exc))
-    final = final or d.get('last_assistant_message') or ''
     st.execute('UPDATE backlog SET assistant_text=?, completed_at=?, diff=?, numstat=? WHERE session=? AND turn=?',
                (final, time.strftime('%Y-%m-%dT%H:%M:%S'), diff, numstat, sid, r['turn']))
     if backlog_tokens(st, r['project']) >= THRESHOLD: spawn_writer(r['project'])

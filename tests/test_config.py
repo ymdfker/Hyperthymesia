@@ -31,9 +31,10 @@ class ConfigTest(unittest.TestCase):
 
     def test_auto_select_only_cli_never_api(self):
         with mock.patch.dict(os.environ, {'OPENAI_API_KEY': 'sk-x', 'DEEPSEEK_API_KEY': 'k'}), \
-             mock.patch('shutil.which', side_effect=lambda n: '/bin/claude' if n == 'claude' else None):
+             mock.patch('shutil.which', side_effect=lambda n: '/bin/claude' if n == 'claude' else None), \
+             mock.patch('agent_memory.install.codebuddy_exe', return_value=None):
             self.assertEqual(config.writer_settings()['provider'], 'claude')
-        with mock.patch('shutil.which', return_value=None):
+        with mock.patch('shutil.which', return_value=None), mock.patch('agent_memory.install.codebuddy_exe', return_value=None):
             self.assertEqual(config.writer_settings()['provider'], '')
 
     def test_api_key_from_named_env_only(self):

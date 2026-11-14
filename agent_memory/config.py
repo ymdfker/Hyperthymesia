@@ -12,8 +12,8 @@
 import os, re, shutil
 from . import paths
 
-AUTO_ORDER = ['codex', 'claude', 'qoder', 'dsh']   # 自动选择时依次检查的命令行
-CLI_EXE = {'codex': 'codex', 'claude': 'claude', 'qoder': 'qoder', 'dsh': 'dsh'}
+AUTO_ORDER = ['codex', 'claude', 'codebuddy', 'qoder', 'dsh']   # 自动选择时依次检查的命令行
+CLI_EXE = {'codex': 'codex', 'claude': 'claude', 'codebuddy': 'codebuddy', 'qoder': 'qoder', 'dsh': 'dsh'}
 
 
 def _parse_toml(text):
@@ -59,7 +59,9 @@ def writer_settings():
     if s['provider']:
         s['source'] = '环境变量' if os.environ.get('AGENT_MEMORY_PROVIDER') else '配置文件'
     else:
-        s['provider'] = next((p for p in AUTO_ORDER if shutil.which(CLI_EXE[p])), '')
+        from .install import codebuddy_exe
+        found = lambda p: codebuddy_exe() if p == 'codebuddy' else shutil.which(CLI_EXE[p])   # codebuddy 可能只在 WorkBuddy 安装包里
+        s['provider'] = next((p for p in AUTO_ORDER if found(p)), '')
         s['source'] = '自动选择（本机已安装的命令行）' if s['provider'] else '无可用提供方'
     return s
 

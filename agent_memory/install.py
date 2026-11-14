@@ -84,7 +84,42 @@ def codex(project=None, remove=False):
     return [cp]
 
 
-AGENTS = {'claude': claude, 'codex': codex}
+def codebuddy_exe():
+    """CodeBuddy 命令行：PATH 上的 codebuddy，或 WorkBuddy 安装包里自带的那一份。"""
+    for c in [shutil.which('codebuddy'), '/Applications/WorkBuddy.app/Contents/Resources/app.asar.unpacked/cli/bin/codebuddy',
+              os.path.expandvars(r'%LOCALAPPDATA%\Programs\WorkBuddy\resources\app.asar.unpacked\cli\bin\codebuddy.cmd')]:
+        if c and Path(c).exists(): return c
+    return None
+
+
+def codebuddy(project=None, remove=False):
+    """CodeBuddy / WorkBuddy：钩子写 ~/.codebuddy/settings.json（--project 时为项目的 .codebuddy/settings.local.json）；
+    MCP 用户级通过官方命令 `codebuddy mcp add --scope user` 登记，项目级写项目的 .mcp.json。"""
+    home = Path(os.environ.get('HOME') or Path.home())
+    sp = (Path(project) / '.codebuddy' / 'settings.local.json') if project else home / '.codebuddy' / 'settings.json'
+    s = _load(sp); hooks = s.setdefault('hooks', {})
+    for ev, name in CLAUDE_EVENTS.items():
+        groups = [g for g in hooks.get(ev, []) if not _is_ours(g)]
+        if not remove: groups.append({'hooks': [{'type': 'command', 'command': _cmd('hook', name, '--agent', 'codebuddy'), 'timeout': 60}]})
+        if groups: hooks[ev] = groups
+        else: hooks.pop(ev, None)
+    if not hooks: s.pop('hooks', None)
+    _save(sp, s); files = [sp]
+    if project:
+        mp = Path(project) / '.mcp.json'; m = _load(mp); servers = m.setdefault('mcpServers', {}); servers.pop(NAME, None)
+        if not remove: c = self_cmd(); servers[NAME] = {'type': 'stdio', 'command': c[0], 'args': c[1:] + ['serve']}
+        _save(mp, m); files.append(mp)
+    else:
+        import subprocess
+        exe = codebuddy_exe()
+        if not exe: raise SystemExit('找不到 codebuddy 命令行（WorkBuddy 安装包里自带一份）')
+        subprocess.run([exe, 'mcp', 'remove', '--scope', 'user', NAME], capture_output=True)
+        if not remove: subprocess.run([exe, 'mcp', 'add', '--scope', 'user', NAME, '--'] + self_cmd() + ['serve'], capture_output=True, check=True)
+        files.append('codebuddy 用户级 MCP（经 codebuddy mcp add 登记）')
+    return files
+
+
+AGENTS = {'claude': claude, 'codex': codex, 'codebuddy': codebuddy}
 
 
 def run(argv, remove=False):

@@ -69,6 +69,18 @@ class HookFlowTest(unittest.TestCase):
         p.write_text('\n'.join(json.dumps(r) for r in rows), encoding='utf-8')
         self.assertEqual(hooks._codex_final(str(p)), 'done')
 
+    def test_codebuddy_stop_uses_last_assistant_message(self):
+        d = {'session_id': 'c1', 'cwd': str(self.proj), 'prompt': '分页改成30'}
+        self.call('prompt-submit', d, agent='codebuddy')
+        self.call('stop', {'session_id': 'c1', 'cwd': str(self.proj), 'last_assistant_message': '已改为30', 'transcript_path': '/不存在'}, agent='codebuddy')
+        r = state(paths.home()).execute("SELECT assistant_text FROM backlog WHERE session='c1'").fetchone()
+        self.assertEqual(r[0], '已改为30')
+        p = self.root / 'cb.jsonl'
+        p.write_text('\n'.join(json.dumps(x, ensure_ascii=False) for x in [
+            {'type': 'message', 'role': 'user', 'content': [{'type': 'input_text', 'text': '问'}]},
+            {'type': 'message', 'role': 'assistant', 'content': [{'type': 'output_text', 'text': '答'}]}]), encoding='utf-8')
+        self.assertEqual(hooks._codebuddy_final(str(p)), '答')
+
     def test_writer_lock(self):
         with writecmd.Lock('x') as a:
             self.assertTrue(a.ok)
@@ -94,6 +106,14 @@ class InstallTest(unittest.TestCase):
         install.claude(remove=True)
         self.assertEqual(json.loads(sp.read_text(encoding='utf-8')), mine)
         self.assertEqual(json.loads((self.home / '.claude.json').read_text(encoding='utf-8')), {'mcpServers': {'other': {'command': 'x'}}})
+
+    def test_codebuddy_project_install(self):
+        proj = self.home / 'p'; proj.mkdir()
+        install.codebuddy(str(proj))
+        s = json.loads((proj / '.codebuddy' / 'settings.local.json').read_text(encoding='utf-8'))
+        self.assertIn('--agent codebuddy', json.dumps(s)); self.assertIn('hyperthymesia', json.loads((proj / '.mcp.json').read_text(encoding='utf-8'))['mcpServers'])
+        install.codebuddy(str(proj), remove=True)
+        self.assertEqual(json.loads((proj / '.codebuddy' / 'settings.local.json').read_text(encoding='utf-8')), {})
 
     def test_codex_block_append_and_remove(self):
         cp = self.home / '.codex' / 'config.toml'; cp.parent.mkdir(); cp.write_text('model = "gpt-5.6-sol"\n', encoding='utf-8')

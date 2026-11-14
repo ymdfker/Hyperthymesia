@@ -3,6 +3,7 @@
 提供方由配置决定（见 config.py：环境变量 > ~/.agent-memory/config.toml > 自动选择本机已装的命令行）：
   codex  ：codex exec，借 ChatGPT 订阅（默认模型 gpt-5.6-luna）
   claude ：claude -p，借 Claude 订阅（默认 claude-haiku-5-5）
+  codebuddy：codebuddy -p（WorkBuddy 自带），借 WorkBuddy 账号；参数与 claude 同构，支持会话续接
   qoder  ：qoder -p，借 Qoder 账号（实验：未实测，不支持会话续接）
   dsh    ：DeepSeek Harness 无头模式，借其配置的模型与 key（实验：未实测，不支持会话续接）
   openai ：任意 OpenAI 兼容接口（OpenAI、DeepSeek 等）；key 只从配置里写明的环境变量读取，强制 JSON 输出
@@ -87,6 +88,22 @@ def _claude(home, system, prompt, sid, log):
                   'cached_input_tokens': cr, 'output_tokens': u.get('output_tokens', 0)})
 
 
+def _codebuddy(home, system, prompt, sid, log):
+    from .install import codebuddy_exe
+    exe = codebuddy_exe()
+    if not exe: raise ProviderError('找不到 codebuddy 命令行（WorkBuddy 安装包里自带一份）')
+    cmd = [exe, '-p', '--output-format', 'json', '--tools', '', '--strict-mcp-config', '--system-prompt', system] + \
+          (['--model', model()] if model() else []) + (['--resume', sid] if sid else [])
+    r = subprocess.run(cmd, input=prompt, capture_output=True, text=True, encoding='utf-8', errors='replace', cwd=_workdir(home), timeout=1800)
+    try: o = json.loads(r.stdout)
+    except ValueError: raise ProviderError('codebuddy 输出无法解析：' + (r.stderr or r.stdout)[-400:])
+    if isinstance(o, list): o = next((x for x in reversed(o) if x.get('type') == 'result'), {})   # 输出为事件数组，取最后的结果
+    if r.returncode or o.get('is_error'): raise ProviderError('codebuddy 调用失败：' + str(o.get('result'))[:400])
+    u = o.get('usage', {}); cr = u.get('cache_read_input_tokens', 0)
+    return Reply(o.get('session_id') or sid, o.get('result', ''),
+                 {'input_tokens': u.get('input_tokens', 0), 'cached_input_tokens': cr, 'output_tokens': u.get('output_tokens', 0)})
+
+
 def _openai(home, system, prompt, sid, log):
     import urllib.request
     from . import config
@@ -147,6 +164,6 @@ def _fake(home, system, prompt, sid, log):
 
 
 def call(home, system, prompt, sid=None, log=None):
-    fn = {'codex': _codex, 'claude': _claude, 'qoder': _qoder, 'dsh': _dsh, 'openai': _openai, 'fake': _fake}.get(name())
+    fn = {'codex': _codex, 'claude': _claude, 'codebuddy': _codebuddy, 'qoder': _qoder, 'dsh': _dsh, 'openai': _openai, 'fake': _fake}.get(name())
     if not fn: raise ProviderError('没有可用的写入模型：请安装 codex/claude 等命令行，或在 ~/.agent-memory/config.toml 里配置' if not name() else '未知提供方：%s' % name())
     return fn(home, system, prompt, sid, log if log is not None else [])
