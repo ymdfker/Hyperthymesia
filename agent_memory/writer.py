@@ -72,8 +72,8 @@ def _norm(s): return re.sub(r'\s+', '', s or '')
 class Batch:
     """一批写入。stores: {'u': Store, 'p': Store 或 None}；turns: [{session, turn, user, assistant, changes, at}]。"""
 
-    def __init__(self, home, stores, turns, state=None):
-        self.home = home; self.stores = {k: v for k, v in stores.items() if v is not None}
+    def __init__(self, home, stores, turns, state=None, project=''):
+        self.project = project; self.home = home; self.stores = {k: v for k, v in stores.items() if v is not None}
         self.state = state; self.log = []; self.usage = []; self.calls = 0
         self.turns = []
         for i, t in enumerate(turns, 1):
@@ -102,6 +102,7 @@ class Batch:
                                                        o['purpose'], o['facts'], big, (' | ' + '、'.join(o['aliases'])) if o['aliases'] else ''))
             parts.append(('个人库对象' if sc == 'u' else '项目库对象') + '（每行：对象ID 名称 ←父对象 | 用途 | 有效事实数 | 别名）\n' + ('\n'.join(rows) or '（空）'))
         if 'p' not in self.stores: parts.append('（当前没有项目：只有个人库，新对象一律 scope=personal）')
+        elif self.project: parts.insert(0, '当前项目：%s（%s）。本批对话在这个项目里进行。' % (Path(self.project).name, self.project))
         return '\n\n'.join(parts)
 
     def _records(self, sc, objs):
@@ -407,6 +408,6 @@ def merge_delta(base, delta):
     return out
 
 
-def write_batch(home, stores, turns, state=None):
-    """写入一批已完成轮次，返回 {calls, usage, new_facts, secs, log}。"""
-    return Batch(home, stores, turns, state).run()
+def write_batch(home, stores, turns, state=None, project=''):
+    """写入一批已完成轮次，返回 {calls, usage, new_facts, secs, log, answers}；project 为项目根目录（没有项目时为空）。"""
+    return Batch(home, stores, turns, state, project).run()

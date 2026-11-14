@@ -54,7 +54,7 @@ def write_project(project):
                       'changes': changes.change_block(r['diff'] or '', r['numstat'] or ''), 'at': r['started_at']} for r in batch]
             t0 = time.time()
             try:
-                res = writer.write_batch(paths.home(), stores, turns, st)
+                res = writer.write_batch(paths.home(), stores, turns, st, project)
             except Exception as exc:
                 _log({'at': time.strftime('%Y-%m-%dT%H:%M:%S'), 'project': project, 'turns': len(batch), 'error': str(exc)[:300]}); return 0
             st.executemany('UPDATE backlog SET written=1 WHERE session=? AND turn=?', [(r['session'], r['turn']) for r in batch])

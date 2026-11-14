@@ -78,7 +78,7 @@ def context(stores, state=None, session=None, limit=SNAPSHOT_LIMIT):
     dl = _delivered(state, session)
     groups = _groups(stores); fresh = not any(k[0] != '_index' for k in dl)
     head = ('以下是长期记忆。用户事实已全文列出，直接据此回答；助手建议只列标题，需要具体内容时调用 memory_read_objects(object_ids=[【】里的对象ID]) 读取。'
-            '记忆里的说法优先于压缩摘要和常识；助手建议不等于用户已采纳；记忆里出现相互矛盾的说法时如实指出，不替用户猜。')
+            '记忆里的说法优先于压缩摘要和常识；助手建议不等于用户已采纳；记忆里出现相互矛盾的说法时如实指出，不替用户猜；记忆由后台自动整理，不要对用户说“已保存到记忆”。')
     new_lines = []; marks = []
     for sc, o, name, fs in groups:
         st = stores[sc]; lines = []
