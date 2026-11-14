@@ -14,6 +14,7 @@ from pathlib import Path
 from . import changes, paths, reader
 from .store import state
 
+ALWAYS_FULL = {'trae'}   # 钩子不给会话记录路径的宿主：无法检查注入是否还在上文
 THRESHOLD = int(os.environ.get('HYPERTHYMESIA_BACKLOG_TOKENS', '16000'))   # 积压估算 token 达到此值触发写入（设计 25.5）
 
 
@@ -68,6 +69,8 @@ ADAPTERS = {
     'codebuddy': (_codebuddy_final, lambda event, ctx: {'hookSpecificOutput': {'hookEventName': 'UserPromptSubmit', 'additionalContext': ctx}} if ctx else {}),
     # Qoder 桌面 agent：会话记录格式与 Claude Code 相同，Stop 输入也直接带 last_assistant_message
     'qoder': (_claude_final, lambda event, ctx: {'hookSpecificOutput': {'hookEventName': 'UserPromptSubmit', 'additionalContext': ctx}} if ctx else {}),
+    # Trae：钩子输入不带会话记录路径，Stop 直接带 last_assistant_message
+    'trae': (lambda tp: '', lambda event, ctx: {'hookSpecificOutput': {'hookEventName': 'UserPromptSubmit', 'additionalContext': ctx}} if ctx else {}),
     'codex': (_codex_final, lambda event, ctx: {'hookSpecificOutput': {'hookEventName': 'UserPromptSubmit', 'additionalContext': ctx}} if ctx else {}),
 }
 
@@ -97,6 +100,8 @@ def on_prompt(d, agent):
         try:
             if '长期记忆' not in Path(tp).read_text(encoding='utf-8', errors='replace'): reader.reset_session(st, sid)
         except OSError: pass
+    elif agent in ALWAYS_FULL:
+        reader.reset_session(st, sid)   # 无法确认上文是否还留着之前注入的记忆：每轮注入全文
     from .mcp_server import open_stores
     return ADAPTERS[agent][1]('prompt-submit', reader.context(open_stores(cwd), st, sid))
 

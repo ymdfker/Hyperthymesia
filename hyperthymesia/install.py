@@ -163,7 +163,34 @@ def qoder_writer_check():
     return 'qodercli 已登录：写入将使用你的 Qoder 额度。'
 
 
-AGENTS = {'claude': claude, 'codex': codex, 'workbuddy': codebuddy, 'codebuddy': codebuddy, 'qoder': qoder}   # workbuddy 与 codebuddy 同一套（WorkBuddy 底层是 CodeBuddy）
+TRAE_EVENTS = {'UserPromptSubmit': 'prompt-submit', 'Stop': 'stop', 'SessionStart': 'session-start'}   # Trae 没有压缩前、会话结束事件
+
+
+def trae(project=None, remove=False):
+    """Trae / Trae CN：钩子写 ~/.trae-cn/hooks.json（国际版 ~/.trae/hooks.json；--project 时为项目的 .trae/hooks.json）；
+    MCP 写应用数据目录下 User/mcp.json（--project 时为项目的 .trae/mcp.json）。
+    Trae 的钩子写入后还需用户在“设置 → Hooks”里打开开关才会运行。"""
+    home = Path(os.environ.get('HOME') or Path.home())
+    cn = (home / '.trae-cn').exists()
+    hp = (Path(project) / '.trae' / 'hooks.json') if project else home / ('.trae-cn' if cn else '.trae') / 'hooks.json'
+    if project: mp = Path(project) / '.trae' / 'mcp.json'
+    elif os.name == 'nt': mp = Path(os.environ.get('APPDATA', str(home))) / ('Trae CN' if cn else 'Trae') / 'User' / 'mcp.json'
+    else: mp = home / 'Library' / 'Application Support' / ('Trae CN' if cn else 'Trae') / 'User' / 'mcp.json'
+    s = _load(hp); hooks = s.setdefault('hooks', {})
+    for ev, name in TRAE_EVENTS.items():
+        groups = [g for g in hooks.get(ev, []) if not _is_ours(g)]
+        if not remove: groups.append({'hooks': [{'type': 'command', 'command': _cmd('hook', name, '--agent', 'trae'), 'timeout': 60}]})
+        if groups: hooks[ev] = groups
+        else: hooks.pop(ev, None)
+    if not hooks: s.pop('hooks', None)
+    _save(hp, s)
+    m = _load(mp); servers = m.setdefault('mcpServers', {}); servers.pop(NAME, None)
+    if not remove: c = self_cmd(); servers[NAME] = {'command': c[0], 'args': c[1:] + ['serve']}
+    _save(mp, m)
+    return [hp, mp]
+
+
+AGENTS = {'trae': trae, 'claude': claude, 'codex': codex, 'workbuddy': codebuddy, 'codebuddy': codebuddy, 'qoder': qoder}   # workbuddy 与 codebuddy 同一套（WorkBuddy 底层是 CodeBuddy）
 
 
 def run(argv, remove=False):
@@ -173,6 +200,8 @@ def run(argv, remove=False):
     project = argv[argv.index('--project') + 1] if '--project' in argv else None
     files = AGENTS[argv[0]](project, remove)
     print(('已移除' if remove else '已写入') + '：' + '、'.join(str(f) for f in files))
+    if argv[0] == 'trae' and not remove:
+        print('请在 Trae 的“设置 → Hooks”里打开钩子开关，并重启 Trae（新钩子默认不运行）。')
     if argv[0] == 'qoder' and not remove:
         print(qoder_writer_check())
     if argv[0] == 'codex' and not remove:
