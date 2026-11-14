@@ -9,6 +9,6 @@ A long-term memory framework.
 
 设计与测试记录：`~/Documents/projects/agent-long-term-memory-design.md`（§25 现行设计，§26 复盘，§27 本代码库规划）。
 
-进度：建设中（设计 27.4 第 1 步完成：存储、作用域、脱敏、改动采集）。
+进度：建设中。第 1 步完成：存储、作用域、脱敏、改动采集；第 2 步写入器已移植（程序侧逻辑有单元测试，真实模型回归进行中）。
 
 运行测试：`python3 -m unittest discover -s tests -v`
