@@ -35,6 +35,7 @@
 
    把 `claude` 换成 `workbuddy`、`codex` 或 `qoder`。只想在某个项目里试用：加 `--project 项目目录`，只改这个项目自己的配置。
 3. **重启 agent**，正常使用即可。记忆会在后台自动整理，你什么都不用管。
+   想让 agent 也记得接入之前聊过的内容：`hyperthymesia import --list` 找到会话编号，再 `hyperthymesia import --agent claude --session 编号` 导入（只导入对话；当时的代码改动无法补回）。
 4. **检查是否就绪**：
 
    ```bash
@@ -84,6 +85,8 @@ api_key_env = "DEEPSEEK_API_KEY"         # 只写环境变量名：运行时从�
 | `hyperthymesia doctor` | 自检：整理记忆用的是哪个模型、是否可用 |
 | `hyperthymesia context [目录]` | 查看在该目录下会注入给 agent 的记忆 |
 | `hyperthymesia write` | 立即整理积压的对话（平时由后台自动完成） |
+| `hyperthymesia import --list` | 列出本机各 agent 已有的会话（编号、时间、轮数、项目目录） |
+| `hyperthymesia import --agent <agent> --session <编号>...` | 把接入之前已有的会话导入记忆（`--all [--days N]` 导入全部或最近 N 天） |
 
 ## 数据与隐私
 

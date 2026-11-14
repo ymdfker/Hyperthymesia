@@ -66,6 +66,12 @@ def _doctor(argv):
 
 
 COMMANDS['doctor'] = (_doctor, '自检：写入模型配置是否可用（不显示 key）')
+def _import(argv):
+    from .importer import run
+    return run(argv)
+
+
+COMMANDS['import'] = (_import, '导入接入前已有的会话：import --list | --agent X --session ID... | --agent X --all [--days N]')
 COMMANDS['hook'] = (_hook, '钩子入口：hook <prompt-submit|stop|pre-compact|session-start|session-end> --agent <claude|codex>')
 COMMANDS['write'] = (_write, '写入积压的已完成轮次：write [--project 目录]')
 COMMANDS['install'] = (_install, '给 agent 写入 MCP 与钩子配置：install <claude|codex> [--project 目录]')

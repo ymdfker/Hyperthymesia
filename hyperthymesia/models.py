@@ -5,7 +5,8 @@
   （如 "credits": "x0.08"），直接读取，不花任何额度。
 - Qoder：读取官方文档的模型倍率表（docs.qoder.com 模型选择器页面的 Markdown 版，如 Qwen3.8-Flash 0.1×），不花额度。
   文档里没有的模型排在最后；文档读不到时才退回实测（对每个模型发一次短请求，按宿主报告的消耗比较）。
-- Claude Code：没有模型列表和本机价格，只有 haiku/sonnet/opus 三档：各发一次短请求，按报告的美元消耗比较，结果缓存。
+- Claude Code：只有 haiku/sonnet/opus 三档别名（各自指向最新版）。读 Anthropic 官方价格页（Markdown 版），取每一档最新版的价格。
+  （短请求实测不可用：提示缓存会让后测的模型显得更便宜，实测曾把 opus 误判为最便宜。）
 - Codex：既不给价格也不报告消耗。读取 OpenAI 官方价格页（platform.openai.com/docs/pricing），
   截取各模型名附近的文字，由便宜模型整理出价格；读取失败时退回 Codex 模型说明里标为 affordable 的模型。
 选择：按价格从低到高，对候选依次做一次能力试探（必须正确输出 JSON：太弱的模型会把记忆写坏），第一个通过的即选中。
@@ -22,6 +23,7 @@ PROBE_PROMPT = ('从下面对话抽取事实，回复 {"facts":[{"key":"…","va
                 '用户：默认分页原来是 20，现在改成 50。代码评审以后交给 Marco。')
 TINY_PROMPT = '只回复 {"ok":true}'
 OPENAI_PRICING = 'https://platform.openai.com/docs/pricing'   # openai.com/api/pricing 对脚本返回 403（已实测）
+CLAUDE_PRICING = 'https://platform.claude.com/docs/en/about-claude/pricing.md'
 QODER_PRICING = 'https://docs.qoder.com/user-guide/chat/model-tier-selector.md'
 
 
@@ -100,6 +102,22 @@ def qoder_doc_prices(ids):
     return out
 
 
+def claude_prices(ids):
+    """Anthropic 官方价格表：每个别名（haiku/sonnet/opus）取版本号最高的那一行的输入、输出价（美元/百万 token）。"""
+    try: md = _fetch(CLAUDE_PRICING)
+    except Exception: return {}
+    best = {}
+    for line in md.splitlines():
+        m = re.search(r'Claude (Haiku|Sonnet|Opus) ([0-9.]+)', line)
+        nums = re.findall(r'\$([0-9.]+)\s*(?:USD\s*)?/\s*MTok', line)
+        if not m or len(nums) < 2: continue
+        alias, ver = m.group(1).lower(), float(m.group(2).rstrip('.'))
+        # 页面里同一模型出现在多张表中，第一次出现的是基础价格表；同一档取版本号最高的
+        if alias in ids and (alias not in best or ver > best[alias][0]):
+            best[alias] = (ver, float(nums[0]) * 0.9 + float(nums[-1]) * 0.1)   # 写入以输入为主：按 9:1 加权
+    return {a: v[1] for a, v in best.items()}
+
+
 def measure(provider, model):
     """极短请求的实际消耗（宿主报告的 credit 或美元）；失败返回 None。"""
     from . import providers
@@ -146,13 +164,16 @@ def prices(provider, ids, old):
     if provider == 'qoder':
         p = qoder_doc_prices(ids)
         if p: return p, 'Qoder 官方文档倍率'
-    if provider in ('qoder', 'claude'):
+    if provider == 'claude':
+        p = claude_prices(ids)
+        return p, ('Anthropic 官方价格页' if p else '价格页读取失败')
+    if provider == 'qoder':
         got = {k: v for k, v in (old or {}).items() if k in ids}
         for m in ids:
             if m not in got:
                 c = measure(provider, m)
                 if c is not None: got[m] = c
-        return got, '极短请求实测'
+        return got, '短请求实测（官方文档读取失败时的退路）'
     if provider == 'codex':
         p = codex_prices(ids)
         return p, ('OpenAI 官方价格页' if p else '价格页读取失败，按模型说明')
