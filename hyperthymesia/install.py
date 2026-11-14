@@ -166,28 +166,13 @@ def qoder_writer_check():
     return 'qodercli 已登录：写入将使用你的 Qoder 额度。'
 
 
-def traecli_path():
-    """TRAE 官方命令行：PATH 上的 traecli，或官方安装脚本的默认位置 ~/.local/bin/traecli。"""
-    p = shutil.which('traecli') or str(Path(os.environ.get('HOME') or Path.home()) / '.local' / 'bin' / 'traecli')
-    return p if Path(p).exists() else None
-
-
 def trae_writer_check():
-    """Trae 桌面版不带命令行：写入要用 Trae 自己的额度，需要官方 TRAE CLI（traecli）。只在 install trae 时检查，没装就默认安装。"""
-    if not traecli_path():
-        print('正在安装 TRAE 官方命令行 traecli（官方安装脚本 trae.cn/trae-cli/install.sh），用于以 Trae 额度整理记忆……')
-        if os.name == 'nt':
-            _run_quiet(['powershell', '-NoProfile', '-Command', 'irm https://trae.cn/trae-cli/install.ps1 | iex'])
-        else:
-            # 把安装目录预先放进 PATH：官方脚本发现已在 PATH 中就不会改写用户的 shell 配置文件；本框架按绝对路径调用它
-            env = dict(os.environ, PATH=str(Path(os.environ.get('HOME') or Path.home()) / '.local' / 'bin') + os.pathsep + os.environ.get('PATH', ''))
-            _run_quiet(['sh', '-c', 'curl -fsSL https://trae.cn/trae-cli/install.sh | bash'], env=env)
-        if not traecli_path():
-            return '未能安装 traecli：记忆可以读取，但写入无法使用 Trae 额度。可手动安装（见 docs.trae.cn/cli），或在配置里使用自己的 API key。'
-    r = _run_quiet([traecli_path(), 'models', '--json'])
-    if not r or not (r.stdout or '').strip() or r.stdout.strip() in ('[]', 'null'):
-        return '还需要登录一次：在终端运行 traecli，按提示登录 Trae 账号（之后写入会自动使用你的 Trae 额度）。'
-    return 'traecli 可用：写入将使用你的 Trae 额度。'
+    """Trae 暂不支持用自身额度写入（TRAE CLI 个人账号无模型可用）：只检查用户是否在配置里填了 API key。"""
+    from . import config
+    if (config.load().get('writer') or {}).get('provider'):
+        return '已在配置里指定写入用的模型：记忆整理将使用该配置。'
+    return ('提示：Trae 暂不支持用 Trae 自己的额度整理记忆。记忆的读取正常可用；要启用整理，'
+            '请在 ~/.hyperthymesia/config.toml 的 [writer] 里配置自己的 API key（见 README“用 API key 的用户”）。')
 
 
 

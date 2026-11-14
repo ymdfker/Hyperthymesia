@@ -44,6 +44,14 @@ class ConfigTest(unittest.TestCase):
         with mock.patch.dict(os.environ, {'HYPERTHYMESIA_HOST_AGENT': 'codebuddy'}):
             self.assertEqual(config.writer_settings()['provider'], 'openai')
 
+    def test_trae_host_never_borrows_other_agents(self):
+        # Trae 暂不支持自身额度写入：即使本机装了别家命令行也不借用，只认用户配置的 API
+        with mock.patch.dict(os.environ, {'HYPERTHYMESIA_HOST_AGENT': 'trae'}), mock.patch('shutil.which', return_value='/bin/x'):
+            self.assertEqual(config.writer_settings()['provider'], '')
+        self.cfg('[writer]\nprovider = "openai"\nmodel = "deepseek-chat"\n')
+        with mock.patch.dict(os.environ, {'HYPERTHYMESIA_HOST_AGENT': 'trae'}):
+            self.assertEqual(config.writer_settings()['provider'], 'openai')
+
     def test_model_choice_by_host_price(self):
         from hyperthymesia import models
         ids = ['auto', 'deepseek-v4-pro', 'glm-5.3', 'glm-5.3-flash', 'space-bunny', 'custom-local:x']

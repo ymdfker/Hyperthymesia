@@ -17,6 +17,8 @@ from . import paths
 AUTO_ORDER = ['codex', 'claude', 'codebuddy', 'qoder', 'dsh']   # 不知道宿主时，自动选择依次检查的命令行
 # 各宿主 agent 默认用于写入的便宜模型（可在配置 [writer] model 覆盖）
 CHEAP_MODEL = {'codex': 'gpt-5.6-luna', 'claude': 'claude-haiku-5-5', 'codebuddy': 'glm-5.3-flash', 'qoder': 'qwen3.8-flash'}   # qoder 实测：qwen3.8-flash 约 0.07 credit/次，低于 efficient 档（约 0.18）
+# 暂不支持用自身额度写入的宿主：TRAE CLI 公开版只给企业版，个人账号拿不到模型（设计 28.11）。这些宿主须在配置里填自己的 API key。
+NO_WRITER_HOSTS = {'trae': 'Trae 暂不支持用自身额度整理记忆：请在 ~/.hyperthymesia/config.toml 的 [writer] 里配置自己的 API key'}
 CLI_EXE = {'codex': 'codex', 'claude': 'claude', 'codebuddy': 'codebuddy', 'qoder': 'qodercli', 'dsh': 'dsh'}
 
 
@@ -65,6 +67,8 @@ def writer_settings():
         s['source'] = '环境变量' if os.environ.get('HYPERTHYMESIA_PROVIDER') else '配置文件'
     elif host in CLI_EXE:
         s['provider'] = host; s['source'] = '宿主 agent（用它自己的便宜模型和额度）'
+    elif host in NO_WRITER_HOSTS:
+        s['provider'] = ''; s['source'] = NO_WRITER_HOSTS[host]   # 不借别家 agent 的额度
     else:
         from .install import codebuddy_exe
         found = lambda p: codebuddy_exe() if p == 'codebuddy' else shutil.which(CLI_EXE[p])   # codebuddy 可能只在 WorkBuddy 安装包里
