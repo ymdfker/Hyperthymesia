@@ -81,6 +81,7 @@ class Batch:
             self.turns.append(dict(t, n=i, user=u, assistant=a, su='%s:%s:u' % (t['session'], t['turn']), sa='%s:%s:a' % (t['session'], t['turn'])))
         self.seen = {}          # 模型看过的记录 ref -> {scope, id, object, readonly, text}
         self.new_facts = []     # [(scope, fact id)]
+        self.answers = []
         self.keys = {}; self.made = {}   # 本批新对象：模型给的临时 key -> 定义 / 已建对象 (scope, id)，跨多次 apply 保留
 
     # ------------------------------------------------------------ 材料、索引、旧记录
@@ -158,6 +159,7 @@ class Batch:
     def ask(self, prompt, sid=None):
         rep = providers.call(self.home, RULES, prompt, sid, self.log)
         self.calls += 1; self.usage.append(rep.usage)
+        self.answers.append(rep.text)   # 原始回答，便于排查（不含凭据：材料已脱敏）
         return rep
 
     # ------------------------------------------------------------ 主流程
@@ -196,7 +198,7 @@ class Batch:
         if out: self.apply(out, quote_retry=True)
         self.gap_fill(); self.conflict_check(); self.save_sources()
         tot = {k: sum(u.get(k, 0) for u in self.usage) for k in ('input_tokens', 'cached_input_tokens', 'output_tokens')}
-        return {'calls': self.calls, 'usage': tot, 'new_facts': len(self.new_facts), 'secs': round(time.time() - t0, 1), 'log': self.log}
+        return {'calls': self.calls, 'usage': tot, 'new_facts': len(self.new_facts), 'secs': round(time.time() - t0, 1), 'log': self.log, 'answers': self.answers}
 
     # ------------------------------------------------------------ 编号解析
     def _obj(self, i):
