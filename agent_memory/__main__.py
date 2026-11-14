@@ -6,6 +6,23 @@ from . import __version__
 COMMANDS = {}   # 子命令名 -> (处理函数(argv), 一行说明)；serve、hook、write、install、doctor 在后续步骤加入
 
 
+def _serve(argv):
+    from .mcp_server import serve
+    return serve(argv)
+
+
+def _context(argv):
+    """调试用：打印当前目录下本轮会注入的记忆文本（不记送达）。"""
+    import os
+    from . import reader
+    from .mcp_server import open_stores
+    print(reader.context(open_stores(argv[0] if argv else os.getcwd())) or '（无注入内容）')
+
+
+COMMANDS['serve'] = (_serve, '启动 MCP 只读服务（stdio）')
+COMMANDS['context'] = (_context, '打印当前目录会注入的记忆（调试用）')
+
+
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     if not argv or argv[0] in ('-h', '--help', 'help'):
