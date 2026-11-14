@@ -1,0 +1,31 @@
+# 每次推送：在 macOS 与 Windows 上跑单元测试，打包单个可执行文件，并对产物做冒烟测试。
+name: build
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: 单元测试
+        run: python -m unittest discover -s tests -v
+      - name: 安装打包工具（只在构建时需要，产物不依赖它）
+        run: python -m pip install pyinstaller==6.11.1
+      - name: 打包
+        run: python -m PyInstaller --onefile --name agent-memory --add-data "agent_memory/rules/writer.txt${{ runner.os == 'Windows' && ';' || ':' }}agent_memory/rules" --clean --noconfirm packaging/entry.py
+      - name: 冒烟测试产物
+        run: python packaging/smoke.py dist/agent-memory${{ runner.os == 'Windows' && '.exe' || '' }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: agent-memory-${{ runner.os }}
+          path: dist/agent-memory*

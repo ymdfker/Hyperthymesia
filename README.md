@@ -12,3 +12,10 @@ A long-term memory framework.
 进度：建设中。第 1 步完成：存储、作用域、脱敏、改动采集；第 2 步写入器已移植，240 轮回归不低于原型；第 3 步读取（快照/目录注入、MCP 只读服务）完成；第 4 步钩子入口、后台写入命令、Claude Code/Codex 安装完成（单元测试），真实宿主端到端待测。
 
 运行测试：`python3 -m unittest discover -s tests -v`
+
+## 构建
+
+每次推送到 main，GitHub Actions 会在 macOS、Windows、Linux 上运行单元测试，用 PyInstaller 打出单个可执行文件 `agent-memory`，
+并对产物做冒烟测试（MCP 握手、钩子一轮、安装/卸载）。产物在 Actions 的构建记录里下载。
+本地打包：`python -m pip install pyinstaller` 后执行 workflow 里的打包命令。PyInstaller 只在构建时需要，产物不依赖它，也不依赖 Python。
+
