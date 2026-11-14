@@ -119,7 +119,27 @@ def codebuddy(project=None, remove=False):
     return files
 
 
-AGENTS = {'claude': claude, 'codex': codex, 'codebuddy': codebuddy}
+def qoder(project=None, remove=False):
+    """Qoder（桌面 agent 与 qodercli 共用）：钩子写 ~/.qoder/settings.json（--project 时为项目的 .qoder/settings.local.json）；
+    MCP 写 ~/.qoder/mcp.json（--project 时为项目的 .mcp.json）。"""
+    home = Path(os.environ.get('HOME') or Path.home())
+    sp = (Path(project) / '.qoder' / 'settings.local.json') if project else home / '.qoder' / 'settings.json'
+    mp = (Path(project) / '.mcp.json') if project else home / '.qoder' / 'mcp.json'
+    s = _load(sp); hooks = s.setdefault('hooks', {})
+    for ev, name in CLAUDE_EVENTS.items():
+        groups = [g for g in hooks.get(ev, []) if not _is_ours(g)]
+        if not remove: groups.append({'hooks': [{'type': 'command', 'command': _cmd('hook', name, '--agent', 'qoder'), 'timeout': 60}]})
+        if groups: hooks[ev] = groups
+        else: hooks.pop(ev, None)
+    if not hooks: s.pop('hooks', None)
+    _save(sp, s)
+    m = _load(mp); servers = m.setdefault('mcpServers', {}); servers.pop(NAME, None)
+    if not remove: c = self_cmd(); servers[NAME] = {'command': c[0], 'args': c[1:] + ['serve']}
+    _save(mp, m)
+    return [sp, mp]
+
+
+AGENTS = {'claude': claude, 'codex': codex, 'codebuddy': codebuddy, 'qoder': qoder}
 
 
 def run(argv, remove=False):

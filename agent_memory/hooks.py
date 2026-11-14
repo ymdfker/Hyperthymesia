@@ -66,6 +66,8 @@ ADAPTERS = {
     # 宿主名: (取最终回复的函数, 注入输出格式)
     'claude': (_claude_final, lambda event, ctx: {'hookSpecificOutput': {'hookEventName': 'UserPromptSubmit', 'additionalContext': ctx}} if ctx else {}),
     'codebuddy': (_codebuddy_final, lambda event, ctx: {'hookSpecificOutput': {'hookEventName': 'UserPromptSubmit', 'additionalContext': ctx}} if ctx else {}),
+    # Qoder 桌面 agent：会话记录格式与 Claude Code 相同，Stop 输入也直接带 last_assistant_message
+    'qoder': (_claude_final, lambda event, ctx: {'hookSpecificOutput': {'hookEventName': 'UserPromptSubmit', 'additionalContext': ctx}} if ctx else {}),
     'codex': (_codex_final, lambda event, ctx: {'hookSpecificOutput': {'hookEventName': 'UserPromptSubmit', 'additionalContext': ctx}} if ctx else {}),
 }
 

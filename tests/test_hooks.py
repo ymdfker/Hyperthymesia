@@ -126,6 +126,16 @@ class InstallTest(unittest.TestCase):
         install.codebuddy(str(proj), remove=True)
         self.assertEqual(json.loads((proj / '.codebuddy' / 'settings.local.json').read_text(encoding='utf-8')), {})
 
+    def test_qoder_install_and_restore(self):
+        sp = self.home / '.qoder' / 'settings.json'; sp.parent.mkdir()
+        mine = {'enabledPlugins': {'x': True}}; sp.write_text(json.dumps(mine), encoding='utf-8')
+        (self.home / '.qoder' / 'mcp.json').write_text(json.dumps({'mcpServers': {}}), encoding='utf-8')
+        install.qoder()
+        self.assertIn('--agent qoder', json.dumps(json.loads(sp.read_text(encoding='utf-8'))))
+        self.assertIn('hyperthymesia', json.loads((self.home / '.qoder' / 'mcp.json').read_text(encoding='utf-8'))['mcpServers'])
+        install.qoder(remove=True)
+        self.assertEqual(json.loads(sp.read_text(encoding='utf-8')), mine)
+
     def test_codex_block_append_and_remove(self):
         cp = self.home / '.codex' / 'config.toml'; cp.parent.mkdir(); cp.write_text('model = "gpt-5.6-sol"\n', encoding='utf-8')
         install.codex(); install.codex()
