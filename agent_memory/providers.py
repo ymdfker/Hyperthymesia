@@ -1,9 +1,11 @@
 """写入器的模型提供方（设计 26.5、26.6）。写入器只需要：发一段文字、拿回 JSON 文本、报告用量。
 
-AGENT_MEMORY_PROVIDER 选择提供方：
+提供方由配置决定（见 config.py：环境变量 > ~/.agent-memory/config.toml > 自动选择本机已装的命令行）：
   codex  ：codex exec，借 ChatGPT 订阅（默认模型 gpt-5.6-luna）
   claude ：claude -p，借 Claude 订阅（默认 claude-haiku-5-5）
-  openai ：任意 OpenAI 兼容 HTTP 接口，key 从 AGENT_MEMORY_API_KEY 或 OPENAI_API_KEY 读取，强制 JSON 输出
+  qoder  ：qoder -p，借 Qoder 账号（实验：未实测，不支持会话续接）
+  dsh    ：DeepSeek Harness 无头模式，借其配置的模型与 key（实验：未实测，不支持会话续接）
+  openai ：任意 OpenAI 兼容接口（OpenAI、DeepSeek 等）；key 只从配置里写明的环境变量读取，强制 JSON 输出
   fake   ：测试用，按顺序返回预设回答（不调用任何模型）
 所有提供方返回 Reply(sid, text, usage)；usage 统一为 input_tokens / cached_input_tokens / output_tokens。
 sid 是可续接的会话编号：codex/claude 由命令行给出，openai 由本地保存的消息历史实现（接口本身无状态）。"""
@@ -19,12 +21,17 @@ class ProviderError(RuntimeError):
     pass
 
 
+def settings():
+    from . import config
+    return config.writer_settings()
+
+
 def name():
-    return os.environ.get('AGENT_MEMORY_PROVIDER', 'codex')
+    return settings()['provider']
 
 
 def model():
-    return os.environ.get('AGENT_MEMORY_MODEL') or DEFAULT_MODEL.get(name(), '')
+    return settings()['model'] or DEFAULT_MODEL.get(name(), '')
 
 
 def _workdir(home):
@@ -82,9 +89,11 @@ def _claude(home, system, prompt, sid, log):
 
 def _openai(home, system, prompt, sid, log):
     import urllib.request
-    base = (os.environ.get('AGENT_MEMORY_BASE_URL') or 'https://api.openai.com/v1').rstrip('/')
-    key = os.environ.get('AGENT_MEMORY_API_KEY') or os.environ.get('OPENAI_API_KEY')
-    if not key or not model(): raise ProviderError('openai 提供方需要 AGENT_MEMORY_MODEL 和 AGENT_MEMORY_API_KEY（或 OPENAI_API_KEY）')
+    from . import config
+    s = settings(); base = (s['base_url'] or 'https://api.openai.com/v1').rstrip('/')
+    key, var = config.api_key(s)
+    if not key: raise ProviderError('openai 提供方读不到 key：请设置环境变量 %s（配置里的 api_key_env 指定变量名）' % var)
+    if not model(): raise ProviderError('openai 提供方需要在配置里写明 model')
     sid = sid or 'api-' + uuid.uuid4().hex[:12]; hp = _workdir(home) / (sid + '.json')
     msgs = json.loads(hp.read_text(encoding='utf-8')) if hp.exists() else [{'role': 'system', 'content': system}]
     msgs.append({'role': 'user', 'content': prompt})
@@ -100,6 +109,33 @@ def _openai(home, system, prompt, sid, log):
                              'cached_input_tokens': (u.get('prompt_tokens_details') or {}).get('cached_tokens', 0)})
 
 
+def _one_shot_cli(home, cmd, prompt):
+    """不支持系统提示和会话续接的命令行：规则拼在请求前面，每次都是新会话。"""
+    r = subprocess.run(cmd, input=prompt, capture_output=True, text=True, encoding='utf-8', errors='replace',
+                       cwd=_workdir(home), timeout=1800)
+    if r.returncode: raise ProviderError('%s 调用失败：%s' % (cmd[0], (r.stderr or r.stdout)[-400:]))
+    return r.stdout
+
+
+def _qoder(home, system, prompt, sid, log):
+    exe = shutil.which('qoder') or shutil.which('qodercli')
+    if not exe: raise ProviderError('找不到 qoder 命令')
+    cmd = [exe, '-p', '-o', 'json'] + (['--model', model()] if model() else [])
+    out = _one_shot_cli(home, cmd, system + '\n\n' + prompt)
+    try: o = json.loads(out); text = o.get('result') or o.get('content') or o.get('text') or ''
+    except ValueError: text = out
+    u = (o.get('usage') if isinstance(o, dict) else None) or {}
+    return Reply(None, text, {'input_tokens': u.get('input_tokens', 0), 'cached_input_tokens': u.get('cache_read_input_tokens', 0),
+                              'output_tokens': u.get('output_tokens', 0)})
+
+
+def _dsh(home, system, prompt, sid, log):
+    exe = shutil.which('dsh')
+    if not exe: raise ProviderError('找不到 dsh 命令')
+    text = _one_shot_cli(home, [exe, '--profile', 'headless', system + '\n\n' + prompt], '')   # 无头模式只把最终回答写到 stdout
+    return Reply(None, text, {'input_tokens': 0, 'cached_input_tokens': 0, 'output_tokens': 0})   # 不报告用量
+
+
 FAKE_REPLIES = []   # 测试用：依次弹出的回答文本；可为函数 f(prompt) -> text
 
 
@@ -111,6 +147,6 @@ def _fake(home, system, prompt, sid, log):
 
 
 def call(home, system, prompt, sid=None, log=None):
-    fn = {'codex': _codex, 'claude': _claude, 'openai': _openai, 'fake': _fake}.get(name())
-    if not fn: raise ProviderError('未知提供方：%s' % name())
+    fn = {'codex': _codex, 'claude': _claude, 'qoder': _qoder, 'dsh': _dsh, 'openai': _openai, 'fake': _fake}.get(name())
+    if not fn: raise ProviderError('没有可用的写入模型：请安装 codex/claude 等命令行，或在 ~/.agent-memory/config.toml 里配置' if not name() else '未知提供方：%s' % name())
     return fn(home, system, prompt, sid, log if log is not None else [])

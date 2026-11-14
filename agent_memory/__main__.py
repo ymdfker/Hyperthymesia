@@ -42,6 +42,27 @@ def _uninstall(argv):
     return run(argv, remove=True)
 
 
+def _doctor(argv):
+    """自检：写入模型从哪里来、能不能用；不打印任何 key 的内容。"""
+    import os, shutil
+    from . import config, paths
+    s = config.writer_settings()
+    print('记忆目录：%s' % paths.home())
+    print('写入提供方：%s（来源：%s）' % (s['provider'] or '无', s['source']))
+    if s['provider'] in config.CLI_EXE:
+        exe = shutil.which(config.CLI_EXE[s['provider']])
+        print('  命令行：%s' % (exe or '未找到（请安装或在配置里换提供方）'))
+    if s['provider'] == 'openai':
+        key, var = config.api_key(s)
+        print('  接口地址：%s' % (s['base_url'] or 'https://api.openai.com/v1'))
+        print('  模型：%s' % (s['model'] or '未配置（必填）'))
+        print('  key：%s' % ('已从环境变量 %s 读到（不显示内容）' % var if key else '环境变量 %s 未设置' % var))
+    elif s['model']:
+        print('  模型：%s' % s['model'])
+    return 0 if s['provider'] else 1
+
+
+COMMANDS['doctor'] = (_doctor, '自检：写入模型配置是否可用（不显示 key）')
 COMMANDS['hook'] = (_hook, '钩子入口：hook <prompt-submit|stop|pre-compact|session-start|session-end> --agent <claude|codex>')
 COMMANDS['write'] = (_write, '写入积压的已完成轮次：write [--project 目录]')
 COMMANDS['install'] = (_install, '给 agent 写入 MCP 与钩子配置：install <claude|codex> [--project 目录]')

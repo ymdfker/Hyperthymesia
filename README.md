@@ -19,3 +19,18 @@ A long-term memory framework.
 并对产物做冒烟测试（MCP 握手、钩子一轮、安装/卸载）。产物在 Actions 的构建记录里下载。
 本地打包：`python -m pip install pyinstaller` 后执行 workflow 里的打包命令。PyInstaller 只在构建时需要，产物不依赖它，也不依赖 Python。
 
+## 写入模型配置
+
+写入器需要一个便宜模型。默认自动选择本机已安装的 agent 命令行（codex、claude、qoder、dsh），借用该 agent 自己的登录和额度，
+本框架不接触任何 key。要改用 API（如 DeepSeek、OpenAI），在 `~/.agent-memory/config.toml` 写：
+
+```toml
+[writer]
+provider = "openai"
+model = "deepseek-chat"
+base_url = "https://api.deepseek.com/v1"
+api_key_env = "DEEPSEEK_API_KEY"   # 只写环境变量名，运行时从环境读取，不保存、不复制 key
+```
+
+`agent-memory doctor` 检查当前用的是哪个提供方、命令行是否存在、key 是否读得到（不显示 key 内容）。
+
