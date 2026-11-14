@@ -85,6 +85,7 @@ def on_prompt(d, agent):
     pdb, root = paths.project_db(cwd)
     n = (st.execute('SELECT MAX(turn) FROM backlog WHERE session=?', (sid,)).fetchone()[0] or 0) + 1
     tree = changes.snapshot(paths.home(), root) if root else ''
+    st.execute('INSERT OR REPLACE INTO backlog_agent VALUES(?,?)', (sid, agent))   # 写入时用这个宿主自己的便宜模型
     st.execute('INSERT OR REPLACE INTO backlog(session, turn, project, user_text, started_at, diff, numstat, written) VALUES(?,?,?,?,?,?,?,0)',
                (sid, n, str(root or ''), d.get('prompt') or '', time.strftime('%Y-%m-%dT%H:%M:%S'), 'tree:' + tree, ''))
     from .mcp_server import open_stores
@@ -105,7 +106,7 @@ def on_stop(d, agent):
         except Exception as exc: _log('final_reply_failed', str(exc))
     st.execute('UPDATE backlog SET assistant_text=?, completed_at=?, diff=?, numstat=? WHERE session=? AND turn=?',
                (final, time.strftime('%Y-%m-%dT%H:%M:%S'), diff, numstat, sid, r['turn']))
-    if backlog_tokens(st, r['project']) >= THRESHOLD: spawn_writer(r['project'])
+    if backlog_tokens(st, r['project']) >= THRESHOLD: spawn_writer(r['project'], agent)
     return {}
 
 
@@ -113,7 +114,7 @@ def on_pre_compact(d, agent):
     sid = d.get('session_id') or 'unknown'; st = _st()
     reader.reset_session(st, sid)
     pdb, root = paths.project_db(d.get('cwd') or os.getcwd())
-    spawn_writer(str(root or ''))
+    spawn_writer(str(root or ''), agent)
     return {}
 
 
@@ -121,13 +122,13 @@ def on_session_start(d, agent):
     st = _st()
     if d.get('source') in ('compact', 'clear'): reader.reset_session(st, d.get('session_id'))
     projects = [r[0] for r in st.execute('SELECT DISTINCT project FROM backlog WHERE written=0 AND completed_at IS NOT NULL')]
-    for p in projects: spawn_writer(p)
+    for p in projects: spawn_writer(p, agent)
     return {}
 
 
 def on_session_end(d, agent):
     pdb, root = paths.project_db(d.get('cwd') or os.getcwd())
-    spawn_writer(str(root or ''))
+    spawn_writer(str(root or ''), agent)
     return {}
 
 
@@ -146,13 +147,13 @@ def self_cmd():
     return [sys.executable] if getattr(sys, 'frozen', False) else [sys.executable, '-m', 'agent_memory']
 
 
-def spawn_writer(project):
-    """在后台启动写入，立即返回，不让宿主等待。"""
+def spawn_writer(project, agent=''):
+    """在后台启动写入，立即返回，不让宿主等待；写入用宿主 agent 自己的便宜模型。"""
     kw = {'stdin': subprocess.DEVNULL, 'stdout': subprocess.DEVNULL, 'stderr': subprocess.DEVNULL}
     if os.name == 'nt': kw['creationflags'] = 0x00000008 | 0x00000200   # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
     else: kw['start_new_session'] = True
     env = dict(os.environ); env.pop('CLAUDECODE', None)
-    subprocess.Popen(self_cmd() + ['write', '--project', project], env=env, **kw)
+    subprocess.Popen(self_cmd() + ['write', '--project', project] + (['--agent', agent] if agent else []), env=env, **kw)
 
 
 def _log(kind, msg):

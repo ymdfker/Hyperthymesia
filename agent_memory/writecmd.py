@@ -70,11 +70,17 @@ def write_project(project):
 
 
 def run(argv):
-    """agent-memory write [--project 目录]；不带参数时写入全部有积压的项目。"""
+    """agent-memory write [--project 目录] [--agent 宿主]；不带参数时写入全部有积压的项目。
+    --agent 指明宿主，写入用该宿主自己的便宜模型；不给时按积压记录里登记的宿主。"""
     if '--project' in argv:
         projects = [argv[argv.index('--project') + 1]]
     else:
         projects = [r[0] for r in state(paths.home()).execute('SELECT DISTINCT project FROM backlog WHERE written=0 AND completed_at IS NOT NULL')]
+    agent = argv[argv.index('--agent') + 1] if '--agent' in argv else ''
+    if not agent:
+        r = state(paths.home()).execute("SELECT a.agent FROM backlog b JOIN backlog_agent a ON a.session=b.session WHERE b.written=0 ORDER BY b.started_at DESC LIMIT 1").fetchone()
+        agent = r[0] if r else ''
+    if agent: os.environ['AGENT_MEMORY_HOST_AGENT'] = agent
     for p in projects:
         n = write_project(p)
         print('%s：%s' % (p or '（个人）', '已有写入进程在运行，跳过' if n is None else '写入 %d 轮' % n))

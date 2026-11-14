@@ -15,7 +15,7 @@ from collections import namedtuple
 from pathlib import Path
 
 Reply = namedtuple('Reply', 'sid text usage')
-DEFAULT_MODEL = {'codex': 'gpt-5.6-luna', 'claude': 'claude-haiku-5-5'}
+DEFAULT_MODEL = {'codex': 'gpt-5.6-luna', 'claude': 'claude-haiku-5-5', 'codebuddy': 'glm-5.3-flash'}
 
 
 class ProviderError(RuntimeError):

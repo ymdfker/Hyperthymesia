@@ -6,13 +6,17 @@
     base_url = "https://api.deepseek.com/v1"
     api_key_env = "DEEPSEEK_API_KEY"        # 只写环境变量名：本框架运行时从环境读取，不保存、不复制 key
 
-优先级：环境变量（AGENT_MEMORY_PROVIDER / _MODEL / _BASE_URL / _API_KEY_ENV）> 配置文件 > 自动选择。
-自动选择只会挑本机已安装的 agent 命令行（借用该 agent 自己的登录与额度），不会自动动用任何 API key：
-使用付费 API 必须由用户在配置里明确指定。"""
+优先级：环境变量（AGENT_MEMORY_PROVIDER / _MODEL / _BASE_URL / _API_KEY_ENV）> 配置文件 > 宿主 agent > 自动选择。
+规则（用户确认）：订阅用户的写入用宿主 agent 自己的便宜模型和额度（WorkBuddy 用 WorkBuddy 的模型，Claude Code 用 Haiku，
+Codex 用 luna），不借别家 agent；API key 用户用该 key 支持的便宜模型（在配置里写明 model）。
+宿主 agent 由钩子告知（写入进程的 AGENT_MEMORY_HOST_AGENT）。自动选择只在不知道宿主时使用，只挑本机已装的命令行，
+不会自动动用任何 API key：使用付费 API 必须由用户在配置里明确指定。"""
 import os, re, shutil
 from . import paths
 
-AUTO_ORDER = ['codex', 'claude', 'codebuddy', 'qoder', 'dsh']   # 自动选择时依次检查的命令行
+AUTO_ORDER = ['codex', 'claude', 'codebuddy', 'qoder', 'dsh']   # 不知道宿主时，自动选择依次检查的命令行
+# 各宿主 agent 默认用于写入的便宜模型（可在配置 [writer] model 覆盖）
+CHEAP_MODEL = {'codex': 'gpt-5.6-luna', 'claude': 'claude-haiku-5-5', 'codebuddy': 'glm-5.3-flash'}
 CLI_EXE = {'codex': 'codex', 'claude': 'claude', 'codebuddy': 'codebuddy', 'qoder': 'qoder', 'dsh': 'dsh'}
 
 
@@ -56,13 +60,17 @@ def writer_settings():
          'model': os.environ.get('AGENT_MEMORY_MODEL') or w.get('model') or '',
          'base_url': os.environ.get('AGENT_MEMORY_BASE_URL') or w.get('base_url') or '',
          'api_key_env': os.environ.get('AGENT_MEMORY_API_KEY_ENV') or w.get('api_key_env') or ''}
+    host = os.environ.get('AGENT_MEMORY_HOST_AGENT', '')
     if s['provider']:
         s['source'] = '环境变量' if os.environ.get('AGENT_MEMORY_PROVIDER') else '配置文件'
+    elif host in CLI_EXE:
+        s['provider'] = host; s['source'] = '宿主 agent（用它自己的便宜模型和额度）'
     else:
         from .install import codebuddy_exe
         found = lambda p: codebuddy_exe() if p == 'codebuddy' else shutil.which(CLI_EXE[p])   # codebuddy 可能只在 WorkBuddy 安装包里
         s['provider'] = next((p for p in AUTO_ORDER if found(p)), '')
         s['source'] = '自动选择（本机已安装的命令行）' if s['provider'] else '无可用提供方'
+    if not s['model']: s['model'] = CHEAP_MODEL.get(s['provider'], '')
     return s
 
 

@@ -37,6 +37,15 @@ class ConfigTest(unittest.TestCase):
         with mock.patch('shutil.which', return_value=None), mock.patch('agent_memory.install.codebuddy_exe', return_value=None):
             self.assertEqual(config.writer_settings()['provider'], '')
 
+    def test_host_agent_uses_its_own_cheap_model(self):
+        with mock.patch.dict(os.environ, {'AGENT_MEMORY_HOST_AGENT': 'codebuddy'}):
+            s = config.writer_settings(); self.assertEqual((s['provider'], s['model']), ('codebuddy', 'glm-5.3-flash'))
+        with mock.patch.dict(os.environ, {'AGENT_MEMORY_HOST_AGENT': 'claude'}):
+            self.assertEqual(config.writer_settings()['model'], 'claude-haiku-5-5')
+        self.cfg('[writer]\nprovider = "openai"\nmodel = "deepseek-chat"\n')    # 用户明确配置 API 时以配置为准
+        with mock.patch.dict(os.environ, {'AGENT_MEMORY_HOST_AGENT': 'codebuddy'}):
+            self.assertEqual(config.writer_settings()['provider'], 'openai')
+
     def test_api_key_from_named_env_only(self):
         self.cfg('[writer]\nprovider = "openai"\nmodel = "deepseek-chat"\nbase_url = "https://api.deepseek.com/v1"\napi_key_env = "DEEPSEEK_API_KEY"\n')
         s = config.writer_settings()
