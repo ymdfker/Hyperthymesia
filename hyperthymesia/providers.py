@@ -1,6 +1,6 @@
 """写入器的模型提供方（设计 26.5、26.6）。写入器只需要：发一段文字、拿回 JSON 文本、报告用量。
 
-提供方由配置决定（见 config.py：环境变量 > ~/.agent-memory/config.toml > 自动选择本机已装的命令行）：
+提供方由配置决定（见 config.py：环境变量 > ~/.hyperthymesia/config.toml > 自动选择本机已装的命令行）：
   codex  ：codex exec，借 ChatGPT 订阅（默认模型 gpt-5.6-luna）
   claude ：claude -p，借 Claude 订阅（默认 claude-haiku-5-5）
   codebuddy：codebuddy -p（WorkBuddy 自带），借 WorkBuddy 账号；参数与 claude 同构，支持会话续接
@@ -165,5 +165,5 @@ def _fake(home, system, prompt, sid, log):
 
 def call(home, system, prompt, sid=None, log=None):
     fn = {'codex': _codex, 'claude': _claude, 'codebuddy': _codebuddy, 'qoder': _qoder, 'dsh': _dsh, 'openai': _openai, 'fake': _fake}.get(name())
-    if not fn: raise ProviderError('没有可用的写入模型：请安装 codex/claude 等命令行，或在 ~/.agent-memory/config.toml 里配置' if not name() else '未知提供方：%s' % name())
+    if not fn: raise ProviderError('没有可用的写入模型：请安装 codex/claude 等命令行，或在 ~/.hyperthymesia/config.toml 里配置' if not name() else '未知提供方：%s' % name())
     return fn(home, system, prompt, sid, log if log is not None else [])

@@ -1,6 +1,6 @@
 """MCP 只读服务（stdio，JSON-RPC 2.0，每行一条消息）。前台只暴露一个工具 memory_read_objects。
 
-库的选择：个人库 + 当前项目库（项目按工作目录识别：AGENT_MEMORY_CWD，未设置时用进程工作目录，
+库的选择：个人库 + 当前项目库（项目按工作目录识别：HYPERTHYMESIA_CWD，未设置时用进程工作目录，
 各家 agent 启动 MCP 服务时一般就在项目目录里）。读取去重按本服务进程计：一个进程对应一个会话。"""
 import json, os, sys
 
@@ -50,7 +50,7 @@ def handle(req, ctx):
 
 
 def serve(argv=None):
-    cwd = os.environ.get('AGENT_MEMORY_CWD') or os.getcwd()
+    cwd = os.environ.get('HYPERTHYMESIA_CWD') or os.getcwd()
     ctx = {'stores': open_stores(cwd), 'state': state(paths.home()), 'session': 'mcp-%d' % os.getpid()}
     for line in sys.stdin:
         line = line.strip()

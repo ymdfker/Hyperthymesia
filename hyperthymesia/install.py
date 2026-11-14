@@ -1,4 +1,4 @@
-"""agent-memory install/uninstall <agent>：给 agent 写入（或移除）MCP 服务与钩子配置。
+"""hyperthymesia install/uninstall <agent>：给 agent 写入（或移除）MCP 服务与钩子配置。
 
 原则：只增删本框架自己的条目，用户原有配置原样保留；改动前把原文件备份为 *.hyperthymesia.bak。
 - claude：用户级 ~/.claude/settings.json 加钩子，~/.claude.json 的 mcpServers 加服务（--project 目录 时改为该项目的
@@ -11,7 +11,7 @@ from pathlib import Path
 from .hooks import self_cmd
 
 NAME = 'hyperthymesia'
-MARK_BEGIN = '# >>> hyperthymesia（由 agent-memory install 生成，uninstall 会删除这一段）'
+MARK_BEGIN = '# >>> hyperthymesia（由 hyperthymesia install 生成，uninstall 会删除这一段）'
 MARK_END = '# <<< hyperthymesia'
 CLAUDE_EVENTS = {'UserPromptSubmit': 'prompt-submit', 'Stop': 'stop', 'PreCompact': 'pre-compact', 'SessionStart': 'session-start', 'SessionEnd': 'session-end'}
 CODEX_EVENTS = {'UserPromptSubmit': 'prompt-submit', 'Stop': 'stop', 'SessionStart': 'session-start'}
@@ -41,7 +41,7 @@ def _save(p, d):
     p.write_text(json.dumps(d, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
 
 
-def _is_ours(h): return NAME in json.dumps(h) or 'agent_memory' in json.dumps(h) or 'agent-memory' in json.dumps(h)
+def _is_ours(h): return any(k in json.dumps(h) for k in (NAME, 'agent_memory', 'agent-memory'))   # 含旧名字：卸载能清掉改名前写入的条目
 
 
 def claude(project=None, remove=False):
@@ -153,7 +153,7 @@ def qoder_writer_check():
                 exe = shutil.which('qodercli')
         if not exe:
             return ('未安装 qodercli：记忆可以读取，但写入无法使用 Qoder 额度。安装：npm install -g @qoder-ai/qodercli，'
-                    '然后执行 qodercli login；或在 ~/.agent-memory/config.toml 里配置自己的 API key。')
+                    '然后执行 qodercli login；或在 ~/.hyperthymesia/config.toml 里配置自己的 API key。')
     try:
         st = json.loads(subprocess.run([exe, 'status', '--output', 'json'], capture_output=True, text=True, timeout=60).stdout or '{}')
     except (ValueError, subprocess.SubprocessError, OSError):
@@ -163,13 +163,13 @@ def qoder_writer_check():
     return 'qodercli 已登录：写入将使用你的 Qoder 额度。'
 
 
-AGENTS = {'claude': claude, 'codex': codex, 'codebuddy': codebuddy, 'qoder': qoder}
+AGENTS = {'claude': claude, 'codex': codex, 'workbuddy': codebuddy, 'codebuddy': codebuddy, 'qoder': qoder}   # workbuddy 与 codebuddy 同一套（WorkBuddy 底层是 CodeBuddy）
 
 
 def run(argv, remove=False):
-    """agent-memory install|uninstall <claude|codex> [--project 目录]"""
+    """hyperthymesia install|uninstall <claude|codex> [--project 目录]"""
     if not argv or argv[0] not in AGENTS:
-        print('用法：agent-memory %s <%s> [--project 目录]' % ('uninstall' if remove else 'install', '|'.join(AGENTS)), file=sys.stderr); return 2
+        print('用法：hyperthymesia %s <%s> [--project 目录]' % ('uninstall' if remove else 'install', '|'.join(AGENTS)), file=sys.stderr); return 2
     project = argv[argv.index('--project') + 1] if '--project' in argv else None
     files = AGENTS[argv[0]](project, remove)
     print(('已移除' if remove else '已写入') + '：' + '、'.join(str(f) for f in files))

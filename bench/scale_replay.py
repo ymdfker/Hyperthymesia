@@ -3,14 +3,14 @@
 门店/总部/网店是用户的生意，同样属于个人生活。聊天场景没有工作区，默认不开项目库（NO_PROJECT=1），全部进个人库；
 设 NO_PROJECT=0 可测作用域划分。评分按两个库合并后的有效事实计算。
 
-用法：python3 bench/scale_replay.py <输出目录>     （AGENT_MEMORY_PROVIDER / AGENT_MEMORY_MODEL 选择写入模型）
+用法：python3 bench/scale_replay.py <输出目录>     （HYPERTHYMESIA_PROVIDER / HYPERTHYMESIA_MODEL 选择写入模型）
 输出：<输出目录>/rows.json（每批）、score.json（评分）"""
 import json, os, re, sys, time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from agent_memory import writer
-from agent_memory.store import Store, state
+from hyperthymesia import writer
+from hyperthymesia.store import Store, state
 
 SC = Path(os.environ.get('SCALE_SCENARIO', str(Path.home() / 'Documents/projects/agent-memtest/codex_idx/scenario_scale')))
 BATCH = int(os.environ.get('BATCH', '12'))
@@ -67,7 +67,7 @@ def score(out, plan, u, p, rows):
                     and not has(t, e['final']) and not re.search(r'原[为是来]|此前|以前|之前|调整|改[为成到]|由.*[改调涨降提]', t)]
             row['stale_user'] = len(left)
         res.append(row)
-    pr = PRICES.get(os.environ.get('AGENT_MEMORY_PROVIDER', 'codex'))
+    pr = PRICES.get(os.environ.get('HYPERTHYMESIA_PROVIDER', 'codex'))
     usd = sum(((r['usage']['input_tokens'] - r['usage']['cached_input_tokens']) * pr[0] + r['usage']['cached_input_tokens'] * pr[1] + r['usage']['output_tokens'] * pr[2]) / 1e6 for r in rows) if pr else None
     summ = {'attrs': len(res), 'current_ok': sum(r['current'] for r in res), 'scope_ok': sum(r['scope_ok'] for r in res),
             'changed': sum(1 for r in res if 'stale_user' in r), 'changed_clean': sum(1 for r in res if 'stale_user' in r and r['current'] and not r['stale_user']),

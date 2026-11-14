@@ -16,7 +16,7 @@ EXCLUDE = ['.git/', 'node_modules/', '.venv/', 'venv/', '__pycache__/', '*.pyc',
            '*.sqlite', '*.sqlite3', '*.db', '*.db-wal', '*.db-shm', '*.log', '*.zip', '*.tar*', '*.gz', '*.png', '*.jpg', '*.jpeg', '*.gif',
            '*.pdf', '*.mp4', '*.bin', '*.exe', '*.dll', '*.so', '*.dylib']
 MAX_FILE = 512 * 1024
-CAP = int(os.environ.get('AGENT_MEMORY_CHANGE_CAP', '4000'))
+CAP = int(os.environ.get('HYPERTHYMESIA_CHANGE_CAP', '4000'))
 PRIORITY = re.compile(r'(config|settings|\.toml|\.ini|\.ya?ml|\.json|\.env\.example|docs/|README|CONTRIBUTING|\.md$)', re.I)
 
 

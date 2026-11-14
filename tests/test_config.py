@@ -3,14 +3,14 @@ import os, tempfile, unittest
 from pathlib import Path
 from unittest import mock
 
-from agent_memory import config, providers
+from hyperthymesia import config, providers
 
 
 class ConfigTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(); self.home = Path(self.tmp.name)
-        clean = {k: v for k, v in os.environ.items() if not k.startswith('AGENT_MEMORY_')}
-        clean['AGENT_MEMORY_HOME'] = str(self.home)
+        clean = {k: v for k, v in os.environ.items() if not k.startswith('HYPERTHYMESIA_')}
+        clean['HYPERTHYMESIA_HOME'] = str(self.home)
         self.env = mock.patch.dict(os.environ, clean, clear=True); self.env.start()
 
     def tearDown(self): self.env.stop(); self.tmp.cleanup()
@@ -26,24 +26,24 @@ class ConfigTest(unittest.TestCase):
     def test_env_overrides_file(self):
         self.cfg('[writer]\nprovider = "openai"\nmodel = "m1"\n')
         self.assertEqual(config.writer_settings()['provider'], 'openai')
-        with mock.patch.dict(os.environ, {'AGENT_MEMORY_PROVIDER': 'claude'}):
+        with mock.patch.dict(os.environ, {'HYPERTHYMESIA_PROVIDER': 'claude'}):
             s = config.writer_settings(); self.assertEqual((s['provider'], s['source']), ('claude', '环境变量'))
 
     def test_auto_select_only_cli_never_api(self):
         with mock.patch.dict(os.environ, {'OPENAI_API_KEY': 'sk-x', 'DEEPSEEK_API_KEY': 'k'}), \
              mock.patch('shutil.which', side_effect=lambda n: '/bin/claude' if n == 'claude' else None), \
-             mock.patch('agent_memory.install.codebuddy_exe', return_value=None):
+             mock.patch('hyperthymesia.install.codebuddy_exe', return_value=None):
             self.assertEqual(config.writer_settings()['provider'], 'claude')
-        with mock.patch('shutil.which', return_value=None), mock.patch('agent_memory.install.codebuddy_exe', return_value=None):
+        with mock.patch('shutil.which', return_value=None), mock.patch('hyperthymesia.install.codebuddy_exe', return_value=None):
             self.assertEqual(config.writer_settings()['provider'], '')
 
     def test_host_agent_uses_its_own_cheap_model(self):
-        with mock.patch.dict(os.environ, {'AGENT_MEMORY_HOST_AGENT': 'codebuddy'}):
+        with mock.patch.dict(os.environ, {'HYPERTHYMESIA_HOST_AGENT': 'codebuddy'}):
             s = config.writer_settings(); self.assertEqual((s['provider'], s['model']), ('codebuddy', 'glm-5.3-flash'))
-        with mock.patch.dict(os.environ, {'AGENT_MEMORY_HOST_AGENT': 'claude'}):
+        with mock.patch.dict(os.environ, {'HYPERTHYMESIA_HOST_AGENT': 'claude'}):
             self.assertEqual(config.writer_settings()['model'], 'claude-haiku-5-5')
         self.cfg('[writer]\nprovider = "openai"\nmodel = "deepseek-chat"\n')    # 用户明确配置 API 时以配置为准
-        with mock.patch.dict(os.environ, {'AGENT_MEMORY_HOST_AGENT': 'codebuddy'}):
+        with mock.patch.dict(os.environ, {'HYPERTHYMESIA_HOST_AGENT': 'codebuddy'}):
             self.assertEqual(config.writer_settings()['provider'], 'openai')
 
     def test_api_key_from_named_env_only(self):

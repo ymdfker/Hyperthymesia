@@ -22,10 +22,10 @@ jobs:
       - name: 安装打包工具（只在构建时需要，产物不依赖它）
         run: python -m pip install pyinstaller==6.11.1
       - name: 打包
-        run: python -m PyInstaller --onefile --name agent-memory --add-data "agent_memory/rules/writer.txt${{ runner.os == 'Windows' && ';' || ':' }}agent_memory/rules" --clean --noconfirm packaging/entry.py
+        run: python -m PyInstaller --onefile --name hyperthymesia --add-data "hyperthymesia/rules/writer.txt${{ runner.os == 'Windows' && ';' || ':' }}hyperthymesia/rules" --clean --noconfirm packaging/entry.py
       - name: 冒烟测试产物
-        run: python packaging/smoke.py dist/agent-memory${{ runner.os == 'Windows' && '.exe' || '' }}
+        run: python packaging/smoke.py dist/hyperthymesia${{ runner.os == 'Windows' && '.exe' || '' }}
       - uses: actions/upload-artifact@v4
         with:
-          name: agent-memory-${{ runner.os }}
-          path: dist/agent-memory*
+          name: hyperthymesia-${{ runner.os }}
+          path: dist/hyperthymesia*

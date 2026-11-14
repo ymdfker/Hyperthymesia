@@ -1,6 +1,6 @@
 """记忆存放位置（设计 26.7、27.3）。
 
-~/.agent-memory/                      （Windows 为 %USERPROFILE%\\.agent-memory\\；可用 AGENT_MEMORY_HOME 覆盖）
+~/.hyperthymesia/                      （Windows 为 %USERPROFILE%\\.hyperthymesia\\；可用 HYPERTHYMESIA_HOME 覆盖）
   personal.db                         个人库：在所有项目里都成立的用户事实
   projects/<key>.db                   项目库：每个项目一个，只在该项目内可见
   projects/<key>.json                 记录这个 key 对应哪个目录（给人和 doctor 看）
@@ -13,8 +13,8 @@ from pathlib import Path
 
 
 def home() -> Path:
-    h = os.environ.get('AGENT_MEMORY_HOME')
-    p = Path(h).expanduser() if h else Path.home() / '.agent-memory'
+    h = os.environ.get('HYPERTHYMESIA_HOME')
+    p = Path(h).expanduser() if h else Path.home() / '.hyperthymesia'
     p.mkdir(parents=True, exist_ok=True)
     return p
 

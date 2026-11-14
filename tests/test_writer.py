@@ -3,8 +3,8 @@ import json, os, tempfile, unittest
 from pathlib import Path
 from unittest import mock
 
-from agent_memory import providers, writer
-from agent_memory.store import close_all, Store, state
+from hyperthymesia import providers, writer
+from hyperthymesia.store import close_all, Store, state
 
 
 def J(**kw): return json.dumps(kw, ensure_ascii=False)
@@ -13,7 +13,7 @@ def J(**kw): return json.dumps(kw, ensure_ascii=False)
 class WriterTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(); self.home = Path(self.tmp.name)
-        self.env = mock.patch.dict(os.environ, {'AGENT_MEMORY_PROVIDER': 'fake'}); self.env.start()
+        self.env = mock.patch.dict(os.environ, {'HYPERTHYMESIA_PROVIDER': 'fake'}); self.env.start()
         self.u = Store(self.home / 'personal.db', 'u'); self.p = Store(self.home / 'p.db', 'p')
         providers.FAKE_REPLIES.clear()
 

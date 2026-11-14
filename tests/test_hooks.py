@@ -3,15 +3,15 @@ import io, json, os, subprocess, sys, tempfile, unittest
 from pathlib import Path
 from unittest import mock
 
-from agent_memory import hooks, install, paths, providers, writecmd
-from agent_memory.store import close_all, Store, state
+from hyperthymesia import hooks, install, paths, providers, writecmd
+from hyperthymesia.store import close_all, Store, state
 
 
 class HookFlowTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(); self.root = Path(self.tmp.name)
-        self.env = mock.patch.dict(os.environ, {'AGENT_MEMORY_HOME': str(self.root / 'home'), 'AGENT_MEMORY_PROVIDER': 'fake',
-                                                'AGENT_MEMORY_BACKLOG_TOKENS': '100000'}); self.env.start()
+        self.env = mock.patch.dict(os.environ, {'HYPERTHYMESIA_HOME': str(self.root / 'home'), 'HYPERTHYMESIA_PROVIDER': 'fake',
+                                                'HYPERTHYMESIA_BACKLOG_TOKENS': '100000'}); self.env.start()
         self.proj = self.root / 'proj'; self.proj.mkdir(); (self.proj / 'config.py').write_text('PAGE = 10\n', encoding='utf-8')
         providers.FAKE_REPLIES.clear()
         self.spawn = mock.patch.object(hooks, 'spawn_writer'); self.spawned = self.spawn.start()   # 测试里不真的拉起后台写入

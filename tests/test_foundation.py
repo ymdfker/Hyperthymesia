@@ -3,15 +3,15 @@ import os, subprocess, sys, tempfile, unittest
 from pathlib import Path
 from unittest import mock
 
-from agent_memory import changes, paths
-from agent_memory.redact import redact
-from agent_memory.store import close_all, Store, state
+from hyperthymesia import changes, paths
+from hyperthymesia.redact import redact
+from hyperthymesia.store import close_all, Store, state
 
 
 class TmpHome(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(); self.root = Path(self.tmp.name)
-        self.env = mock.patch.dict(os.environ, {'AGENT_MEMORY_HOME': str(self.root / 'home')}); self.env.start()
+        self.env = mock.patch.dict(os.environ, {'HYPERTHYMESIA_HOME': str(self.root / 'home')}); self.env.start()
     def tearDown(self):
         self.env.stop(); close_all(); self.tmp.cleanup()
 

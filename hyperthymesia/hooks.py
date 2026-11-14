@@ -14,7 +14,7 @@ from pathlib import Path
 from . import changes, paths, reader
 from .store import state
 
-THRESHOLD = int(os.environ.get('AGENT_MEMORY_BACKLOG_TOKENS', '16000'))   # 积压估算 token 达到此值触发写入（设计 25.5）
+THRESHOLD = int(os.environ.get('HYPERTHYMESIA_BACKLOG_TOKENS', '16000'))   # 积压估算 token 达到此值触发写入（设计 25.5）
 
 
 # ---------------------------------------------------------------- 会话记录：取助手本轮最终回复
@@ -152,8 +152,8 @@ def backlog_tokens(st, project):
 
 
 def self_cmd():
-    """调用自身的命令行：打包后是可执行文件本身，源码运行时是 python -m agent_memory。"""
-    return [sys.executable] if getattr(sys, 'frozen', False) else [sys.executable, '-m', 'agent_memory']
+    """调用自身的命令行：打包后是可执行文件本身，源码运行时是 python -m hyperthymesia。"""
+    return [sys.executable] if getattr(sys, 'frozen', False) else [sys.executable, '-m', 'hyperthymesia']
 
 
 def spawn_writer(project, agent=''):
@@ -173,7 +173,7 @@ def _log(kind, msg):
 
 
 def run(argv):
-    """agent-memory hook <事件> [--agent claude|codex]"""
+    """hyperthymesia hook <事件> [--agent claude|codex]"""
     event = argv[0] if argv else ''
     agent = argv[argv.index('--agent') + 1] if '--agent' in argv else 'claude'
     out = {}

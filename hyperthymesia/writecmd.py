@@ -1,4 +1,4 @@
-"""agent-memory write：把积压的已完成轮次写入记忆（通常由钩子在后台拉起，也可手动执行）。
+"""hyperthymesia write：把积压的已完成轮次写入记忆（通常由钩子在后台拉起，也可手动执行）。
 
 同一项目同时只允许一个写入进程（锁文件，跨平台）；按开始时间顺序、每批约 BATCH_TOKENS 估算 token 分批写入；
 写成功的轮次标记为已写，失败的保留在积压里，下次再写。"""
@@ -9,7 +9,7 @@ from . import changes, paths, writer
 from .hooks import est_tokens
 from .store import Store, state
 
-BATCH_TOKENS = int(os.environ.get('AGENT_MEMORY_BATCH_TOKENS', '16000'))
+BATCH_TOKENS = int(os.environ.get('HYPERTHYMESIA_BATCH_TOKENS', '16000'))
 LOCK_STALE = 1800   # 锁超过 30 分钟视为上次写入进程已异常退出
 
 
@@ -70,7 +70,7 @@ def write_project(project):
 
 
 def run(argv):
-    """agent-memory write [--project 目录] [--agent 宿主]；不带参数时写入全部有积压的项目。
+    """hyperthymesia write [--project 目录] [--agent 宿主]；不带参数时写入全部有积压的项目。
     --agent 指明宿主，写入用该宿主自己的便宜模型；不给时按积压记录里登记的宿主。"""
     if '--project' in argv:
         projects = [argv[argv.index('--project') + 1]]
@@ -80,7 +80,7 @@ def run(argv):
     if not agent:
         r = state(paths.home()).execute("SELECT a.agent FROM backlog b JOIN backlog_agent a ON a.session=b.session WHERE b.written=0 ORDER BY b.started_at DESC LIMIT 1").fetchone()
         agent = r[0] if r else ''
-    if agent: os.environ['AGENT_MEMORY_HOST_AGENT'] = agent
+    if agent: os.environ['HYPERTHYMESIA_HOST_AGENT'] = agent
     for p in projects:
         n = write_project(p)
         print('%s：%s' % (p or '（个人）', '已有写入进程在运行，跳过' if n is None else '写入 %d 轮' % n))

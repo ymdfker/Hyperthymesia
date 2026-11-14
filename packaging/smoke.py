@@ -6,14 +6,14 @@ from pathlib import Path
 sys.stdout.reconfigure(encoding='utf-8')   # 脚本自己的输出也用 UTF-8（Windows 默认是本地代码页）
 exe = str(Path(sys.argv[1]).resolve())
 tmp = Path(tempfile.mkdtemp())
-env = dict(os.environ, AGENT_MEMORY_HOME=str(tmp / 'home'), HOME=str(tmp / 'userhome'), USERPROFILE=str(tmp / 'userhome'))
+env = dict(os.environ, HYPERTHYMESIA_HOME=str(tmp / 'home'), HOME=str(tmp / 'userhome'), USERPROFILE=str(tmp / 'userhome'))
 (tmp / 'userhome').mkdir()
 proj = tmp / 'proj'; proj.mkdir(); (proj / 'config.py').write_text('PAGE = 10\n', encoding='utf-8')
 
 
 def run(args, inp=None, cwd=None):
     r = subprocess.run([exe] + args, input=inp, capture_output=True, text=True, encoding='utf-8', env=env, cwd=cwd or str(tmp), timeout=120)
-    print('$ agent-memory', ' '.join(args), '->', r.returncode)
+    print('$ hyperthymesia', ' '.join(args), '->', r.returncode)
     if r.returncode != 0: print(r.stdout, r.stderr); sys.exit('失败：' + ' '.join(args))
     return r.stdout
 

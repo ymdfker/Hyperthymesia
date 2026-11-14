@@ -6,7 +6,7 @@
  2. 名字表明是凭据的赋值（password、secret、token、api_key 等，含中文“密码是…”）替换其值；
     值明显不是凭据时不替换（数字、布尔、环境变量引用、空值、占位符）。
 被替换处写成〔已脱敏:类型〕，写入器仍能知道该配置存在、放在哪里。
-用法：from agent_memory.redact import redact; text, hits = redact(text)"""
+用法：from hyperthymesia.redact import redact; text, hits = redact(text)"""
 import re
 
 SHAPES = [

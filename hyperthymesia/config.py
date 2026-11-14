@@ -1,4 +1,4 @@
-"""用户配置 ~/.agent-memory/config.toml（设计 28.3）。示例：
+"""用户配置 ~/.hyperthymesia/config.toml（设计 28.3）。示例：
 
     [writer]
     provider = "openai"                     # codex | claude | qoder | dsh | openai；不写则自动选择
@@ -6,10 +6,10 @@
     base_url = "https://api.deepseek.com/v1"
     api_key_env = "DEEPSEEK_API_KEY"        # 只写环境变量名：本框架运行时从环境读取，不保存、不复制 key
 
-优先级：环境变量（AGENT_MEMORY_PROVIDER / _MODEL / _BASE_URL / _API_KEY_ENV）> 配置文件 > 宿主 agent > 自动选择。
+优先级：环境变量（HYPERTHYMESIA_PROVIDER / _MODEL / _BASE_URL / _API_KEY_ENV）> 配置文件 > 宿主 agent > 自动选择。
 规则（用户确认）：订阅用户的写入用宿主 agent 自己的便宜模型和额度（WorkBuddy 用 WorkBuddy 的模型，Claude Code 用 Haiku，
 Codex 用 luna），不借别家 agent；API key 用户用该 key 支持的便宜模型（在配置里写明 model）。
-宿主 agent 由钩子告知（写入进程的 AGENT_MEMORY_HOST_AGENT）。自动选择只在不知道宿主时使用，只挑本机已装的命令行，
+宿主 agent 由钩子告知（写入进程的 HYPERTHYMESIA_HOST_AGENT）。自动选择只在不知道宿主时使用，只挑本机已装的命令行，
 不会自动动用任何 API key：使用付费 API 必须由用户在配置里明确指定。"""
 import os, re, shutil
 from . import paths
@@ -56,13 +56,13 @@ def load():
 def writer_settings():
     """返回写入器设置：{provider, model, base_url, api_key_env, source}；source 说明 provider 从哪里来。"""
     w = load().get('writer', {}) or {}
-    s = {'provider': os.environ.get('AGENT_MEMORY_PROVIDER') or w.get('provider'),
-         'model': os.environ.get('AGENT_MEMORY_MODEL') or w.get('model') or '',
-         'base_url': os.environ.get('AGENT_MEMORY_BASE_URL') or w.get('base_url') or '',
-         'api_key_env': os.environ.get('AGENT_MEMORY_API_KEY_ENV') or w.get('api_key_env') or ''}
-    host = os.environ.get('AGENT_MEMORY_HOST_AGENT', '')
+    s = {'provider': os.environ.get('HYPERTHYMESIA_PROVIDER') or w.get('provider'),
+         'model': os.environ.get('HYPERTHYMESIA_MODEL') or w.get('model') or '',
+         'base_url': os.environ.get('HYPERTHYMESIA_BASE_URL') or w.get('base_url') or '',
+         'api_key_env': os.environ.get('HYPERTHYMESIA_API_KEY_ENV') or w.get('api_key_env') or ''}
+    host = os.environ.get('HYPERTHYMESIA_HOST_AGENT', '')
     if s['provider']:
-        s['source'] = '环境变量' if os.environ.get('AGENT_MEMORY_PROVIDER') else '配置文件'
+        s['source'] = '环境变量' if os.environ.get('HYPERTHYMESIA_PROVIDER') else '配置文件'
     elif host in CLI_EXE:
         s['provider'] = host; s['source'] = '宿主 agent（用它自己的便宜模型和额度）'
     else:
@@ -75,7 +75,7 @@ def writer_settings():
 
 
 def api_key(s):
-    """按配置的环境变量名取 key；没有配置变量名时依次尝试 AGENT_MEMORY_API_KEY、OPENAI_API_KEY。只在内存里使用。"""
-    for name in ([s['api_key_env']] if s.get('api_key_env') else []) + ['AGENT_MEMORY_API_KEY', 'OPENAI_API_KEY']:
+    """按配置的环境变量名取 key；没有配置变量名时依次尝试 HYPERTHYMESIA_API_KEY、OPENAI_API_KEY。只在内存里使用。"""
+    for name in ([s['api_key_env']] if s.get('api_key_env') else []) + ['HYPERTHYMESIA_API_KEY', 'OPENAI_API_KEY']:
         if os.environ.get(name): return os.environ[name], name
-    return None, s.get('api_key_env') or 'AGENT_MEMORY_API_KEY'
+    return None, s.get('api_key_env') or 'HYPERTHYMESIA_API_KEY'

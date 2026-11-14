@@ -1,4 +1,4 @@
-"""打包后单一可执行文件的入口：agent-memory <子命令> ...
+"""打包后单一可执行文件的入口：hyperthymesia <子命令> ...
 各子命令随对应模块移植逐步加入（设计 27.2）。"""
 import sys
 from . import __version__
@@ -81,7 +81,7 @@ def main(argv=None):
     _utf8_stdio()
     argv = list(sys.argv[1:] if argv is None else argv)
     if not argv or argv[0] in ('-h', '--help', 'help'):
-        print('agent-memory %s\ncommands:' % __version__)
+        print('hyperthymesia %s\ncommands:' % __version__)
         for n, (_, h) in sorted(COMMANDS.items()): print('  %-10s %s' % (n, h))
         return 0
     if argv[0] in ('-V', '--version'):

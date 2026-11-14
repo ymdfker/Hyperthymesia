@@ -2,7 +2,7 @@
 
   python3 bench/claude_e2e.py <测试目录>
 流程：复制编程场景仓库为测试项目（git 仓库）→ install claude --project → Claude Code 跑编码轮次（同一会话）
-→ 等后台写入完成 → 新会话提问。记忆库放在 <测试目录>/home（AGENT_MEMORY_HOME），不碰用户自己的记忆和配置。"""
+→ 等后台写入完成 → 新会话提问。记忆库放在 <测试目录>/home（HYPERTHYMESIA_HOME），不碰用户自己的记忆和配置。"""
 import json, os, shutil, subprocess, sys, time, uuid
 from pathlib import Path
 
@@ -24,8 +24,8 @@ TOOLS = 'Read,Edit,Write,Glob,Grep'
 
 def env(home):
     e = {k: v for k, v in os.environ.items() if not k.startswith(('CLAUDE_CODE_', 'CLAUDECODE', 'MCP_', 'ANTHROPIC_CLAUDE_DESKTOP'))}
-    e.update(AGENT_MEMORY_HOME=str(home), PYTHONPATH=str(REPO), MCP_CONNECTION_NONBLOCKING='false',
-             AGENT_MEMORY_BACKLOG_TOKENS=os.environ.get('AGENT_MEMORY_BACKLOG_TOKENS', '1500'))
+    e.update(HYPERTHYMESIA_HOME=str(home), PYTHONPATH=str(REPO), MCP_CONNECTION_NONBLOCKING='false',
+             HYPERTHYMESIA_BACKLOG_TOKENS=os.environ.get('HYPERTHYMESIA_BACKLOG_TOKENS', '1500'))
     return e
 
 
@@ -49,14 +49,14 @@ def main():
     if not proj.exists():
         shutil.copytree(TEMPLATE, proj)
         subprocess.run(['git', 'init', '-q', str(proj)], check=True)
-    subprocess.run([sys.executable, '-m', 'agent_memory', 'install', 'claude', '--project', str(proj)], cwd=REPO, env=env(home), check=True)
+    subprocess.run([sys.executable, '-m', 'hyperthymesia', 'install', 'claude', '--project', str(proj)], cwd=REPO, env=env(home), check=True)
     log = []; sid = str(uuid.uuid4())
     for i, p in enumerate(ROUNDS): claude(proj, home, p, sid, i == 0, log)
     # 会话结束：再写剩余积压（真实使用中 SessionEnd 钩子会做；-p 进程每轮结束就退出，这里手动补一次）
     for _ in range(120):
         if not list((home / 'locks').glob('*.lock')) if (home / 'locks').exists() else True: break
         time.sleep(5)
-    subprocess.run([sys.executable, '-m', 'agent_memory', 'write'], cwd=REPO, env=env(home))
+    subprocess.run([sys.executable, '-m', 'hyperthymesia', 'write'], cwd=REPO, env=env(home))
     sid2 = str(uuid.uuid4())
     for i, q in enumerate(QUESTIONS): claude(proj, home, q, sid2, i == 0, log)
     (t / 'log.json').write_text(json.dumps(log, ensure_ascii=False, indent=1))

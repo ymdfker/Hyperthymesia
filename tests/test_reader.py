@@ -3,8 +3,8 @@ import json, os, subprocess, sys, tempfile, unittest
 from pathlib import Path
 from unittest import mock
 
-from agent_memory import reader
-from agent_memory.store import close_all, Store, state
+from hyperthymesia import reader
+from hyperthymesia.store import close_all, Store, state
 
 
 class ReaderTest(unittest.TestCase):
@@ -51,13 +51,13 @@ class ReaderTest(unittest.TestCase):
         self.assertIn('没有可读的对象ID', reader.read_objects(self.stores, ['s3']))
 
     def test_mcp_protocol_over_stdio(self):
-        env = dict(os.environ, AGENT_MEMORY_HOME=str(self.home / 'h'), AGENT_MEMORY_CWD=str(self.home))
+        env = dict(os.environ, HYPERTHYMESIA_HOME=str(self.home / 'h'), HYPERTHYMESIA_CWD=str(self.home))
         root = Path(__file__).resolve().parents[1]
         reqs = [{'jsonrpc': '2.0', 'id': 1, 'method': 'initialize', 'params': {'protocolVersion': '2025-06-18'}},
                 {'jsonrpc': '2.0', 'method': 'notifications/initialized'},
                 {'jsonrpc': '2.0', 'id': 2, 'method': 'tools/list'},
                 {'jsonrpc': '2.0', 'id': 3, 'method': 'tools/call', 'params': {'name': 'memory_read_objects', 'arguments': {'object_ids': ['u1']}}}]
-        r = subprocess.run([sys.executable, '-m', 'agent_memory', 'serve'], input='\n'.join(json.dumps(x) for x in reqs) + '\n',
+        r = subprocess.run([sys.executable, '-m', 'hyperthymesia', 'serve'], input='\n'.join(json.dumps(x) for x in reqs) + '\n',
                            capture_output=True, text=True, encoding='utf-8', env=env, cwd=root, timeout=60)
         out = [json.loads(l) for l in r.stdout.splitlines()]
         self.assertEqual([o['id'] for o in out], [1, 2, 3])
