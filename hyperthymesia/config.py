@@ -16,7 +16,7 @@ from . import paths
 
 AUTO_ORDER = ['codex', 'claude', 'codebuddy', 'qoder', 'dsh']   # 不知道宿主时，自动选择依次检查的命令行
 # 各宿主 agent 默认用于写入的便宜模型（可在配置 [writer] model 覆盖）
-CHEAP_MODEL = {'codex': 'gpt-5.6-luna', 'claude': 'claude-haiku-5-5', 'codebuddy': 'glm-5.3-flash', 'qoder': 'lite'}   # qoder 的 lite 档为文档所列的低价档，未实测
+CHEAP_MODEL = {'codex': 'gpt-5.6-luna', 'claude': 'claude-haiku-5-5', 'codebuddy': 'glm-5.3-flash', 'qoder': 'qwen3.8-flash'}   # qoder 实测：qwen3.8-flash 约 0.07 credit/次，低于 efficient 档（约 0.18）
 CLI_EXE = {'codex': 'codex', 'claude': 'claude', 'codebuddy': 'codebuddy', 'qoder': 'qodercli', 'dsh': 'dsh'}
 
 

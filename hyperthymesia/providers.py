@@ -4,7 +4,7 @@
   codex  ：codex exec，借 ChatGPT 订阅（默认模型 gpt-5.6-luna）
   claude ：claude -p，借 Claude 订阅（默认 claude-haiku-5-5）
   codebuddy：codebuddy -p（WorkBuddy 自带），借 WorkBuddy 账号；参数与 claude 同构，支持会话续接
-  qoder  ：qodercli -p，借 Qoder 账号（需另装 qodercli 并登录一次；不支持会话续接）
+  qoder  ：qodercli -p，借 Qoder 账号（需另装 qodercli 并登录一次），支持系统提示与会话续接
   dsh    ：DeepSeek Harness 无头模式，借其配置的模型与 key（实验：未实测，不支持会话续接）
   openai ：任意 OpenAI 兼容接口（OpenAI、DeepSeek 等）；key 只从配置里写明的环境变量读取，强制 JSON 输出
   fake   ：测试用，按顺序返回预设回答（不调用任何模型）
@@ -134,16 +134,31 @@ def _one_shot_cli(home, cmd, prompt):
     return r.stdout
 
 
+def qodercli_cmd():
+    """qodercli 是 Node 脚本：用它旁边的 node 运行，不依赖系统默认 Node 版本（旧版本会直接报语法错误，已实测）。"""
+    exe = shutil.which('qodercli')
+    if not exe: return None
+    node = Path(exe).resolve().parent / ('node.exe' if os.name == 'nt' else 'node')
+    sib = Path(exe).parent / ('node.exe' if os.name == 'nt' else 'node')
+    for n in (sib, node):
+        if n.exists(): return [str(n), exe]
+    return [exe]
+
+
 def _qoder(home, system, prompt, sid, log):
-    exe = shutil.which('qodercli')   # 只认 qodercli：Qoder IDE 也带一个叫 qoder 的启动器，不能混用
-    if not exe: raise ProviderError('找不到 qoder 命令')
-    cmd = [exe, '-p', '-o', 'json'] + (['--model', model()] if model() else [])
-    out = _one_shot_cli(home, cmd, system + '\n\n' + prompt)
-    try: o = json.loads(out); text = o.get('result') or o.get('content') or o.get('text') or ''
-    except ValueError: text = out
-    u = (o.get('usage') if isinstance(o, dict) else None) or {}
-    return Reply(None, text, {'input_tokens': u.get('input_tokens', 0), 'cached_input_tokens': u.get('cache_read_input_tokens', 0),
-                              'output_tokens': u.get('output_tokens', 0)})
+    cmd0 = qodercli_cmd()
+    if not cmd0: raise ProviderError('找不到 qodercli（npm install -g @qoder-ai/qodercli，然后 qodercli login）')
+    cmd = cmd0 + ['-p', '-o', 'json', '--tools', '', '--strict-mcp-config', '--system-prompt', system] + \
+          (['--model', model()] if model() else []) + (['--resume', sid] if sid else [])
+    r = subprocess.run(cmd, input=prompt, capture_output=True, text=True, encoding='utf-8', errors='replace', cwd=_workdir(home), timeout=1800)
+    lines = [l for l in (r.stdout or '').splitlines() if l.strip().startswith('{')]
+    try: o = json.loads(lines[-1])
+    except (ValueError, IndexError): raise ProviderError('qodercli 输出无法解析：' + (r.stderr or r.stdout)[-400:])
+    if o.get('is_error'): raise ProviderError('qodercli 调用失败：' + str(o.get('errors') or o.get('result'))[:400])
+    u = o.get('usage', {}); cr = u.get('cache_read_input_tokens', 0)
+    return Reply(o.get('session_id') or sid, o.get('result', ''),
+                 {'input_tokens': u.get('input_tokens', 0) + cr + u.get('cache_creation_input_tokens', 0), 'cached_input_tokens': cr,
+                  'output_tokens': u.get('output_tokens', 0), 'credits': o.get('total_credits', 0)})
 
 
 def _dsh(home, system, prompt, sid, log):
