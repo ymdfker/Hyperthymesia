@@ -13,7 +13,7 @@
 
 找到你用的 agent，只按那一节一步步做。用多个 agent 就每一节各做一遍。
 
-当前发行版为 **v0.2.4**。macOS 命令行已做兼容测试；IDE／桌面真实问答和 Windows 安装链路尚未全部验收。**WorkBuddy 桌面入口修复仅在源码中，下面的一键下载暂时不包含修复。**
+当前发行版为 **v0.2.5**，包含WorkBuddy桌面接入、防递归、后台选模和建议保存规则修复。下面的一键命令从GitHub最新发行版安装。macOS命令行已做兼容测试；IDE／桌面完整验收和Windows真实安装链路尚未全部完成。
 
 - [Claude Code](#claude-code)
 - [Codex](#codex)
@@ -96,9 +96,9 @@ hyperthymesia doctor --agent codex
 
 **桌面版已知局限（本机5.3.14实测）**：退出时结束钩子不能可靠送达，未达到批量阈值的尾部可能要等下次进入会话、触发启动钩子后才自动补写。仅打开应用停在首页不保证触发；补写完成前，新会话可能答不出尾部信息。已入库记忆的读取不受此问题直接影响。暂不增加补丁，详见[兼容记录](docs/desktop-compat.md)。
 
-**最新桌面验收未通过**：真实使用暴露出后台整理请求被自身钩子记录、引发递归整理的问题。本机已暂停记忆钩子。源码现已加入统一内部任务隔离，64 项无模型测试与真实后台 CLI 标记传递验证通过，但桌面完整读写尚未重新验收；暂不恢复旧积压。详见[兼容报告最新状态](docs/desktop-compat.md)。
+**桌面验证范围**：后台整理曾被自身钩子记录并引发递归；v0.2.5已加入统一内部任务隔离。之后独立桌面短测的核心事实写入和跨会话召回7/7正确，但存在后台耗时及模型选择偏差，整体仅部分通过。新的选模和建议保存规则已完成无模型检查，尚未重新做付费端到端质量验收；退出尾写的宿主局限见上文。详见[兼容报告](docs/desktop-compat.md)。
 
-**发布状态：桌面入口已在源码修复，尚未发布。下列一键命令目前仍下载 v0.2.4，不能安装这次桌面修复；发行包用户请等包含修复的新版本。**
+**发布状态：v0.2.5已包含桌面配置入口修复，下列一键安装或升级命令可安装该版本。**
 
 **1. 安装并接入**
 
@@ -132,7 +132,7 @@ hyperthymesia doctor --agent workbuddy
 
 桌面版配置写入 `~/.workbuddy/settings.json` 和 `~/.workbuddy/mcp.json`，原文件会先备份；已有 CodeBuddy CLI 配置保留。若要单独给 CLI 接入，执行 `hyperthymesia install codebuddy`。
 
-上述桌面路径是修复后的行为；v0.2.4 旧版使用的是 CLI 入口。两者不能混作同一种接入结果。
+上述桌面路径从v0.2.5起生效；v0.2.4旧版使用的是CLI入口。已安装旧版的用户请重新执行第1步升级，再重启WorkBuddy。
 
 ### Qoder
 
@@ -299,7 +299,7 @@ agent 的最终回复和本轮代码改动；积压够多或会话结束时，�
 - **GUI 完整验收**：Claude VS Code／JetBrains／Desktop Code、Codex IDE／App、Qoder IDE／JetBrains、CodeBuddy IDE、WorkBuddy 桌面及 dsh TUI；不能沿用 CLI 或 dsh web 的通过结论。每种形态的简短操作见兼容清单。
 - **S9 环境缺项**：独立 CodeBuddy IDE 本机未安装，仍无实机结果。Qoder 禁用、Codex 提交／停止已补验。WorkBuddy 开关失效已归为宿主已知问题，不列为记忆服务待修复项，不增加补丁；它影响用户停用钩子，不妨碍正常开启时的记忆流程，也不能代替桌面完整读写验收。详细证据见[兼容报告 §6](docs/desktop-compat.md#6-s9-剩余项收尾与-workbuddy-根因2026-11-15最新结果)。
 - **Windows 端到端**：已有单元测试与 CI，尚未验证真实一键安装、宿主钩子触发、记录和注入。可先用假整理模型做不耗额度的 Windows 集成测试。
-- **发布本轮修复**：桌面入口、模型倍率目录及 doctor 的修复已在源码，59 项单元测试通过；尚未提交、构建并发布新版。一键下载仍是 v0.2.4。
+- **后续发布验收**：v0.2.5已发布本轮源码修复；构建、打包检查不等于真实桌面或Windows端到端全部通过，仍需按上面的范围继续验收。
 
 可选后续：v0.2.4 全量回归、Gitee 附件匿名下载验证。无用的本地／远端 v0.2.0 标签已删除。任何需要正常模型回合的测试，执行前先报额度预估。
 
@@ -344,7 +344,7 @@ irm https://github.com/ymdfker/Hyperthymesia/releases/latest/download/install.ps
 
 No Python installation is required for the packaged executable. Wait for the installer to report completion. Repeat for each agent you use.
 
-The published v0.2.4 package predates the WorkBuddy desktop configuration fix. The `workbuddy` command in that release uses the older CLI configuration location. Publishing the source fix does not update that binary; use a release containing the desktop fix before relying on the instructions for desktop integration.
+**Current release: v0.2.5.** It includes the WorkBuddy desktop configuration fix, internal-task isolation, updated background model selection and a shared assistant-suggestion policy. The commands above install the latest GitHub Release. Users of v0.2.4 should rerun installation and restart WorkBuddy.
 
 ### 2. Complete your agent's setup
 
