@@ -1,5 +1,7 @@
 # Hyperthymesia
 
+[English user guide](#english-user-guide) · [GitHub](https://github.com/ymdfker/Hyperthymesia) · [AtomGit](https://atomgit.com/ynndfker/Hyperthymesia)
+
 给 AI agent 用的长期记忆。接入后，你在 Claude Code、Codex、WorkBuddy、Qoder、DeepSeek Harness 里说过的事实、做过的决定、
 代码里定下的约定，新开会话时 agent 依然记得，不用再交代一遍。
 
@@ -300,3 +302,137 @@ agent 的最终回复和本轮代码改动；积压够多或会话结束时，�
 - **发布本轮修复**：桌面入口、模型倍率目录及 doctor 的修复已在源码，59 项单元测试通过；尚未提交、构建并发布新版。一键下载仍是 v0.2.4。
 
 可选后续：v0.2.4 全量回归、Gitee 附件匿名下载验证。无用的本地／远端 v0.2.0 标签已删除。任何需要正常模型回合的测试，执行前先报额度预估。
+
+
+---
+
+## English user guide
+
+Hyperthymesia gives AI agents long-term memory across chats. It captures facts, decisions, project conventions and code changes, then makes relevant memories available in later conversations.
+
+- Memories are stored locally in `~/.hyperthymesia/`. Background extraction sends relevant conversation material to the model used by your agent, after masking detected credentials. This is not fully offline processing.
+- Background writing uses your agent's own model access and quota. Automatic selection considers available acceptance results, speed, token usage and price. Extra usage varies; there is no guaranteed overhead percentage.
+- Personal memories are shared across projects; project memories belong to their project.
+
+Source repositories: [GitHub](https://github.com/ymdfker/Hyperthymesia) · [AtomGit](https://atomgit.com/ynndfker/Hyperthymesia). The installation commands below download published **GitHub Release** assets. Synchronizing source code to AtomGit does not create an AtomGit binary release.
+
+### 1. Install and connect your agent
+
+Choose the identifier for your agent:
+
+| Agent | Identifier |
+|---|---|
+| Claude Code | `claude` |
+| Codex | `codex` |
+| WorkBuddy desktop | `workbuddy` |
+| Qoder | `qoder` |
+| DeepSeek Harness | `dsh` |
+
+**macOS / Linux:** open Terminal and run the following. Replace `claude` with your agent's identifier from the table.
+
+```bash
+AGENT=claude
+curl -fsSL https://github.com/ymdfker/Hyperthymesia/releases/latest/download/install.sh | sh -s -- "$AGENT"
+```
+
+**Windows:** open PowerShell and run the following. Replace `claude` with your agent's identifier.
+
+```powershell
+$env:HY_AGENTS="claude"
+irm https://github.com/ymdfker/Hyperthymesia/releases/latest/download/install.ps1 | iex
+```
+
+No Python installation is required for the packaged executable. Wait for the installer to report completion. Repeat for each agent you use.
+
+The published v0.2.4 package predates the WorkBuddy desktop configuration fix. The `workbuddy` command in that release uses the older CLI configuration location. Publishing the source fix does not update that binary; use a release containing the desktop fix before relying on the instructions for desktop integration.
+
+### 2. Complete your agent's setup
+
+- **Claude Code:** fully quit all Claude Code windows or terminal sessions, then reopen it.
+- **Codex:** fully quit and reopen Codex. Enter `/hooks` and approve/trust the Hyperthymesia hooks. Without approval, the hooks will not run.
+- **WorkBuddy:** fully quit and reopen the app. In its MCP settings, ensure `hyperthymesia` is enabled and connected. With the source fix, desktop settings use `~/.workbuddy/settings.json` and `~/.workbuddy/mcp.json`; existing files are backed up and CodeBuddy CLI settings are preserved. Use `hyperthymesia install codebuddy` for the separate CLI.
+- **Qoder:** the installer sets up the official `qodercli` used for background writing. Run `qodercli login`, complete browser authorization, then fully restart Qoder. If the installer requires npm, install Node.js LTS from [nodejs.org](https://nodejs.org/) and rerun installation.
+- **DeepSeek Harness:** use the DeepSeek API key already configured in dsh. If needed, run `dsh web`, open Settings → Models, configure DeepSeek and save. Obtain a key from [DeepSeek Platform](https://platform.deepseek.com/). Restart dsh by stopping `dsh web` with Ctrl+C and launching it again. Hyperthymesia does not require you to copy the key into its own configuration.
+
+### 3. Check the connection and use it normally
+
+In a new Terminal or PowerShell window, run the command for your agent:
+
+```bash
+hyperthymesia doctor --agent claude
+hyperthymesia doctor --agent codex
+hyperthymesia doctor --agent workbuddy
+hyperthymesia doctor --agent qoder
+hyperthymesia doctor --agent dsh
+```
+
+Run only the relevant line. The writer provider should match your agent; WorkBuddy reports `codebuddy`, its underlying runtime. `doctor` checks configuration, not the complete capture/write/recall chain. Also check the MCP connection and actual hook activity. See the [compatibility notes](docs/desktop-compat.md), currently maintained in Chinese.
+
+Chat and work normally. Hooks record completed turns and code changes; background writing runs when enough material has accumulated or a supported lifecycle event triggers it. Memory is not necessarily saved immediately after each reply. To inspect what a project would receive:
+
+```bash
+hyperthymesia context /path/to/project
+```
+
+### WorkBuddy desktop limitations
+
+On the tested WorkBuddy 5.3.14, normal desktop quit did not reliably deliver `SessionEnd`, even after the runtime was ready and `SessionStart` had fired. Material below the batch threshold may remain pending until the next session-start event triggers background writing. Opening the home screen alone does not guarantee that event; entering an existing chat was verified. A question asked before writing finishes may miss the pending information. Already stored memories remain readable. No fixed waiting time is guaranteed.
+
+The tested version also ignores the `disableAllHooks` setting. This is recorded as a host limitation; Hyperthymesia does not override it with another switch. To disconnect, remove Hyperthymesia's integration using the uninstall command and restart the host.
+
+An earlier desktop run exposed recursive recording of background tasks. Source code now marks internal calls and skips their hooks. A subsequent isolated desktop test saved and recalled all seven target facts correctly, but had model-selection and latency deviations; this is a partial acceptance result, not full desktop certification. The subsequent model-selection and suggestion-policy changes have local checks, not a new paid end-to-end acceptance.
+
+### Optional operations
+
+**Import earlier chats:**
+
+```bash
+hyperthymesia import --list
+hyperthymesia import --agent claude --session SESSION_ID
+```
+
+Replace `claude` and `SESSION_ID` as needed. `--all --days 7` imports chats from the last seven days. Historical code changes cannot be reconstructed by this import.
+
+**Try a single project:**
+
+```bash
+hyperthymesia install claude --project /path/to/project
+```
+
+Project installation supports `claude`, `codex`, `codebuddy`, `workbuddy` and `qoder`. dsh integration is profile-based and does not provide project-level installation isolation.
+
+**Use a separate OpenAI-compatible API for background writing:** create `~/.hyperthymesia/config.toml` only if you want to override your agent's normal model access:
+
+```toml
+[writer]
+provider = "openai"
+model = "deepseek-chat"
+base_url = "https://api.deepseek.com/v1"
+api_key_env = "DEEPSEEK_API_KEY"
+```
+
+Put the actual key in the named environment variable, not in this file.
+
+**Upgrade:** rerun the installation command for your agent. This replaces the executable and refreshes integration while retaining memories. It installs the latest published release, not unreleased source changes.
+
+**Uninstall:** run `hyperthymesia uninstall claude`, substituting your agent's identifier. It removes Hyperthymesia's integration entries and preserves other settings. Memories remain on disk; deleting `~/.hyperthymesia/` permanently removes them.
+
+### Troubleshooting
+
+- **Command not found:** reopen Terminal/PowerShell. If necessary, use `~/.local/bin/hyperthymesia` on macOS/Linux or `%USERPROFILE%\.hyperthymesia\bin\hyperthymesia.exe` on Windows (the latter is a Command Prompt path; in PowerShell use `$env:USERPROFILE`).
+- **macOS blocks the executable:** open System Settings → Privacy & Security and choose Open Anyway if offered.
+- **New information is missing:** inspect the capture/write logs and allow background writing to finish; a connected MCP server alone does not prove that hooks captured or saved the conversation.
+- **IDE, desktop and Windows support:** CLI acceptance does not establish equivalent behavior in every GUI. Several GUI variants, a real Windows installation/hooks workflow and a full week of everyday use remain unverified. See [compatibility notes](docs/desktop-compat.md) for scope and known issues.
+
+### Command reference
+
+| Command | Purpose |
+|---|---|
+| `install <agent> [--project PATH]` | Connect an agent; existing configuration is backed up |
+| `uninstall <agent> [--project PATH]` | Remove integration while preserving unrelated settings |
+| `doctor [--agent AGENT]` | Inspect the writer configuration and model |
+| `context [PATH]` | Show the memory context for a directory |
+| `write` | Manually process pending completed turns; normally automatic |
+| `import --list` / `import --agent AGENT --session ID` | Import earlier chats |
+
+For development, the implementation uses Python's standard library. Run `python3 -m unittest discover -s tests -v`. GitHub Actions tests and packages pushes to `main`; `v*` tags additionally publish GitHub Releases.
