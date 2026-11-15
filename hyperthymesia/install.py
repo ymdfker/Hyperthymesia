@@ -119,6 +119,38 @@ def codebuddy(project=None, remove=False):
     return files
 
 
+def workbuddy_config_dir():
+    """桌面版允许用环境变量指定独立配置目录。"""
+    return Path(os.environ.get('WORKBUDDY_CONFIG_DIR') or Path.home() / '.workbuddy').expanduser()
+
+
+def workbuddy(project=None, remove=False):
+    """WorkBuddy 桌面独立配置；保留 CodeBuddy CLI 的原入口和已有配置。"""
+    if project:
+        return codebuddy(project, remove)
+    directory = workbuddy_config_dir()
+    sp, mp = directory / 'settings.json', directory / 'mcp.json'
+    # 两份配置先解析、备份，再写入；只修改本服务条目，不碰登录和凭据文件。
+    s, m = _load(sp), _load(mp)
+    _backup(sp); _backup(mp)
+    hooks = s.setdefault('hooks', {})
+    for ev, name in CLAUDE_EVENTS.items():
+        groups = [g for g in hooks.get(ev, []) if not _is_ours(g)]
+        if not remove:
+            groups.append({'hooks': [{'type': 'command', 'command': _cmd('hook', name, '--agent', 'codebuddy'), 'timeout': 60}]})
+        if groups: hooks[ev] = groups
+        else: hooks.pop(ev, None)
+    if not hooks: s.pop('hooks', None)
+    servers = m.setdefault('mcpServers', {}); servers.pop(NAME, None)
+    if not remove:
+        c = self_cmd()
+        servers[NAME] = {'type': 'stdio', 'command': c[0], 'args': c[1:] + ['serve'],
+                         'env': {'CODEBUDDY_CONFIG_DIR': str(directory), 'WORKBUDDY_CONFIG_DIR': str(directory)}}
+    if not servers: m.pop('mcpServers', None)
+    _save(sp, s); _save(mp, m)
+    return [sp, mp]
+
+
 def qoder(project=None, remove=False):
     """Qoder（桌面 agent 与 qodercli 共用）：钩子写 ~/.qoder/settings.json（--project 时为项目的 .qoder/settings.local.json）；
     MCP 写 ~/.qoder/mcp.json（--project 时为项目的 .mcp.json）。"""
@@ -281,7 +313,7 @@ def dsh_writer_check():
     return '写入将借用 dsh 的无头模式，用 DeepSeek 官方最便宜的模型和你在 dsh 里配置的 DeepSeek key。'
 
 
-AGENTS = {'dsh': dsh, 'trae': trae, 'claude': claude, 'codex': codex, 'workbuddy': codebuddy, 'codebuddy': codebuddy, 'qoder': qoder}   # workbuddy 与 codebuddy 同一套（WorkBuddy 底层是 CodeBuddy）
+AGENTS = {'dsh': dsh, 'trae': trae, 'claude': claude, 'codex': codex, 'workbuddy': workbuddy, 'codebuddy': codebuddy, 'qoder': qoder}   # 桌面与 CLI 使用不同的用户配置入口
 
 
 def run(argv, remove=False):

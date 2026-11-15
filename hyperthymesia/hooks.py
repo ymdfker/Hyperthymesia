@@ -13,6 +13,7 @@ from pathlib import Path
 
 from . import changes, paths, reader
 from .store import state
+from .execution import internal_env, is_internal
 
 ALWAYS_FULL = {'trae'}   # 钩子不给会话记录路径的宿主：无法检查注入是否还在上文
 THRESHOLD = int(os.environ.get('HYPERTHYMESIA_BACKLOG_TOKENS', '16000'))   # 积压估算 token 达到此值触发写入（设计 25.5）
@@ -214,6 +215,7 @@ def on_pre_compact(d, agent):
 
 
 def on_session_start(d, agent):
+    _log('lifecycle', json.dumps({'event': 'session-start', 'agent': agent, 'session': d.get('session_id')}, ensure_ascii=False))
     st = _st()
     if d.get('source') in ('compact', 'clear'): reader.reset_session(st, d.get('session_id'))
     # 补写上次没整理的积压（Codex、dsh 没有会话结束钩子，靠这里兜底）；用那段对话所属 agent 的模型，不用当前 agent 的
@@ -226,6 +228,7 @@ def on_session_start(d, agent):
 
 
 def on_session_end(d, agent):
+    _log('lifecycle', json.dumps({'event': 'session-end', 'agent': agent, 'session': d.get('session_id')}, ensure_ascii=False))
     pdb, root = paths.project_db(d.get('cwd') or os.getcwd())
     spawn_writer(str(root or ''), agent)
     return {}
@@ -252,8 +255,13 @@ def spawn_writer(project, agent=''):
     kw = {'stdin': subprocess.DEVNULL, 'stdout': subprocess.DEVNULL, 'stderr': subprocess.DEVNULL}
     if os.name == 'nt': kw['creationflags'] = 0x00000008 | 0x00000200   # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
     else: kw['start_new_session'] = True
-    env = dict(os.environ); env.pop('CLAUDECODE', None)
-    subprocess.Popen(self_cmd() + ['write', '--project', project] + (['--agent', agent] if agent else []), env=env, **kw)
+    env = internal_env(); env.pop('CLAUDECODE', None)
+    try:
+        child = subprocess.Popen(self_cmd() + ['write', '--project', project] + (['--agent', agent] if agent else []), env=env, **kw)
+    except OSError as exc:
+        _log('writer_start_failed', json.dumps({'project': project, 'agent': agent, 'error': str(exc)}, ensure_ascii=False))
+        raise
+    _log('writer_started', json.dumps({'project': project, 'agent': agent, 'pid': child.pid if isinstance(child.pid, int) else None}, ensure_ascii=False))
 
 
 def _log(kind, msg):
@@ -289,6 +297,10 @@ def is_subagent(d, agent):
 
 def run(argv):
     """hyperthymesia hook <事件> [--agent claude|codex]"""
+    # 在读取会话、打开数据库和触发补写之前，排除内部任务的全部生命周期事件。
+    if is_internal():
+        sys.stdout.write('{}'); sys.stdout.flush()
+        return 0
     event = argv[0] if argv else ''
     agent = argv[argv.index('--agent') + 1] if '--agent' in argv else 'claude'
     out = {}

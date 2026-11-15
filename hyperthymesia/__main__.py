@@ -48,6 +48,11 @@ def _doctor(argv):
     from . import config, paths
     if '--agent' in argv:   # 按某个 agent 检查：与钩子里一样把它当宿主，看整理记忆会用谁的模型
         a = argv[argv.index('--agent') + 1]
+        if a == 'workbuddy':
+            from .install import workbuddy_config_dir
+            directory = str(workbuddy_config_dir())
+            os.environ['CODEBUDDY_CONFIG_DIR'] = directory
+            os.environ['WORKBUDDY_CONFIG_DIR'] = directory
         os.environ['HYPERTHYMESIA_HOST_AGENT'] = 'codebuddy' if a == 'workbuddy' else a
     s = config.writer_settings()
     print('记忆目录：%s' % paths.home())

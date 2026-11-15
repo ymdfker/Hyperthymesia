@@ -4,12 +4,12 @@
 - CodeBuddy / WorkBuddy：它从服务器拉下来的模型配置缓存在本机 ~/.codebuddy/local_storage/，每个模型带官方倍率
   （如 "credits": "x0.08"），直接读取，不花任何额度。
 - Qoder：读取官方文档的模型倍率表（docs.qoder.com 模型选择器页面的 Markdown 版，如 Qwen3.8-Flash 0.1×），不花额度。
-  文档里没有的模型排在最后；文档读不到时才退回实测（对每个模型发一次短请求，按宿主报告的消耗比较）。
+  文档里没有的模型排在最后；文档读不到时复用已有价格，不额外调用模型测价。
 - Claude Code：只有 haiku/sonnet/opus 三档别名（各自指向最新版）。读 Anthropic 官方价格页（Markdown 版），取每一档最新版的价格。
   （短请求实测不可用：提示缓存会让后测的模型显得更便宜，实测曾把 opus 误判为最便宜。）
 - Codex：既不给价格也不报告消耗。读取 OpenAI 官方价格页（platform.openai.com/docs/pricing），
-  截取各模型名附近的文字，由便宜模型整理出价格；读取失败时退回 Codex 模型说明里标为 affordable 的模型。
-选择：按价格从低到高，对候选依次做一次能力试探（必须正确输出 JSON：太弱的模型会把记忆写坏），第一个通过的即选中。
+  直接解析明确价格表；读取失败时复用价格缓存或模型说明，不调用模型整理价格。
+选择：先复用有来源的端到端验收，按质量、速度和实际token筛选，再比较价格；无合格记录时最多两次条件/更正/建议准入，失败不回退到未验收默认模型。
 结果缓存在 ~/.hyperthymesia/models.json；模型列表变化、30 天到期或调用报“模型不可用”时重新识别。"""
 import json, os, re, shutil, subprocess, time, urllib.request
 from pathlib import Path
@@ -19,8 +19,6 @@ from . import paths
 TTL = 30 * 86400
 SKIP = re.compile(r'^(auto|custom-local:.*|codex-auto-review)$', re.I)
 PROBE_SYSTEM = '你是信息抽取程序。只回复一个 JSON 对象，不要任何其他文字。'
-PROBE_PROMPT = ('从下面对话抽取事实，回复 {"facts":[{"key":"…","value":"…"}]}，key 只用 page_size 和 reviewer。\n'
-                '用户：默认分页原来是 20，现在改成 50。代码评审以后交给 Marco。')
 TINY_PROMPT = '只回复 {"ok":true}'
 OPENAI_PRICING = 'https://platform.openai.com/docs/pricing'   # openai.com/api/pricing 对脚本返回 403（已实测）
 CLAUDE_PRICING = 'https://platform.claude.com/docs/en/about-claude/pricing.md'
@@ -72,7 +70,7 @@ def _codex_cache():
 def codebuddy_prices():
     """从 CodeBuddy 本机缓存的模型配置里读官方倍率：{模型 ID: 倍率}。"""
     out = {}
-    d = Path.home() / '.codebuddy' / 'local_storage'
+    d = Path(os.environ.get('CODEBUDDY_CONFIG_DIR') or Path.home() / '.codebuddy') / 'local_storage'
     for f in sorted(d.glob('*.info'), key=lambda p: p.stat().st_mtime) if d.exists() else []:
         try:
             t = f.read_text(encoding='utf-8', errors='replace')
@@ -153,25 +151,18 @@ def measure(provider, model):
 
 
 def codex_prices(ids):
-    """读取 OpenAI 官方价格页，请便宜模型整理出这些模型的价格（美元/百万 token：输入、输出）；失败返回 {}。"""
-    from . import providers, writer
-    try:
-        html = _fetch(OPENAI_PRICING)
-        text = re.sub(r'\s+', ' ', re.sub(r'<[^>]+>', ' ', re.sub(r'(?s)<(script|style)[^>]*>.*?</\1>', ' ', html)))
-        # 页面很大：只截取各模型名附近的文字交给模型整理
-        text = ' … '.join(text[max(0, m.start() - 80):m.end() + 300] for i in ids for m in list(re.finditer(re.escape(i), text))[:3])[:40000]
-        if not text: return {}
-        # 整理价格这一次调用用 Codex 自己的默认模型，避免“选模型需要先有模型”的循环
-        os.environ.setdefault('HYPERTHYMESIA_MODEL', providers.DEFAULT_MODEL.get('codex', ''))
-        rep = providers.call(paths.home(), PROBE_SYSTEM, '下面是 OpenAI 官方价格页的文字。只针对这些模型：' + '、'.join(ids) +
-                             '，回复 {"prices":{"模型ID":[输入价, 输出价]}}（美元/百万 token），页面里没有的模型不要列。\n' + text)
-        got = writer.parse(rep.text).get('prices', {}) or {}
-        # 写入时输入远多于输出：按 9:1 加权折成一个可比较的单价
-        return {k: float(v[0]) * 0.9 + float(v[1]) * 0.1 for k, v in got.items() if k in ids and isinstance(v, list) and len(v) == 2}
-    except Exception:
-        return {}
-    finally:
-        if os.environ.get('HYPERTHYMESIA_MODEL') == providers.DEFAULT_MODEL.get('codex', ''): os.environ.pop('HYPERTHYMESIA_MODEL', None)
+    """只解析价格页里明确的三列价格表；不再调用模型整理价格。读不到时用已有价格/模型说明。"""
+    try: text = _fetch(OPENAI_PRICING)
+    except Exception: return {}
+    out = {}
+    for line in text.splitlines():
+        if '|' not in line and '<tr' not in line: continue
+        clean = re.sub(r'<[^>]+>', ' ', line)
+        names = [m for m in ids if re.search(r'(?<![\w.-])' + re.escape(m) + r'(?![\w.-])', clean)]
+        nums = re.findall(r'\$([0-9]+(?:\.[0-9]+)?)', clean)
+        if len(names) == 1 and len(nums) == 3:
+            out[names[0]] = float(nums[0]) * .9 + float(nums[2]) * .1
+    return out
 
 
 def codex_affordable(ids):
@@ -192,58 +183,116 @@ def prices(provider, ids, old):
         return p, ('Anthropic 官方价格页' if p else '价格页读取失败')
     if provider == 'qoder':
         got = {k: v for k, v in (old or {}).items() if k in ids}
-        for m in ids:
-            if m not in got:
-                c = measure(provider, m)
-                if c is not None: got[m] = c
-        return got, '短请求实测（官方文档读取失败时的退路）'
+        return got, '官方文档不可读，仅复用已有价格；不额外调用模型测价'
     if provider == 'dsh':
         p = deepseek_prices()
         return p, ('DeepSeek 官方价格页' if p else '价格页读取失败')
     if provider == 'codex':
         p = codex_prices(ids)
-        return p, ('OpenAI 官方价格页' if p else '价格页读取失败，按模型说明')
+        return p or {k:v for k,v in (old or {}).items() if k in ids}, ('OpenAI 官方价格页' if p else '已有价格或模型说明，无模型测价')
     return {}, '无'
 
 
-# ---------------------------------------------------------------- 能力试探与选择
+# ---------------------------------------------------------------- 质量、速度和实际 token 准入
+# 短批/准入材料的宽松上限，不截断正式写入、不改变批量阈值。
+SELECTION_VERSION = 2
+MAX_SCREEN_SECONDS = 120
+MAX_OUTPUT_RATIO = 4
+MAX_CANDIDATES = 2
+PROBE_PROMPT = (
+    '抽取以下三轮的当前事实和未确认建议，只回复JSON：{\"facts\":{\"timeout\":\"…\",\"condition\":\"…\",'
+    '\"reviewer\":\"…\",\"release\":\"…\"},\"suggestions\":[\"…\"]}。数值带单位，条件不能省略，不保存客套。\n'
+    '用户：批处理超时45秒，仅工作日启用。评审人Marco。\n'
+    '助手：建议失败时先保留现场，再检查日志。我也可以帮你写通知。\n'
+    '用户：超时改成60秒，仍仅工作日启用；评审改成Priya。\n'
+    '助手：明白；保留现场、检查日志只是建议，还未获采纳。\n'
+    '用户：每周四发布，其他不变。')
+
+
+def _acceptable(row):
+    return (row.get('quality_pass') is True and isinstance(row.get('seconds'), (int, float))
+            and 0 < row['seconds'] <= MAX_SCREEN_SECONDS
+            and row.get('input_tokens', 0) > 0 and row.get('output_tokens', 0) > 0
+            and row['output_tokens'] / row['input_tokens'] <= MAX_OUTPUT_RATIO)
+
+
+def acceptance():
+    """已有验收数据与本地准入结果；不发请求、不读取对话库。"""
+    p = Path(__file__).parent / 'rules' / 'model_acceptance.json'
+    try: return json.loads(p.read_text(encoding='utf-8')).get('observations', [])
+    except (OSError, ValueError): return []
+
+
 def _probe(provider, model):
     from . import providers, writer
     old = os.environ.get('HYPERTHYMESIA_MODEL'); os.environ['HYPERTHYMESIA_MODEL'] = model
+    started = time.monotonic()
+    row = {'quality_pass': False, 'source': '条件、更正、建议准入题'}
     try:
         rep = providers.call(paths.home(), PROBE_SYSTEM, PROBE_PROMPT)
-        got = {f.get('key'): str(f.get('value')) for f in writer.parse(rep.text).get('facts', [])}
-        return '50' in got.get('page_size', '') and 'marco' in got.get('reviewer', '').lower()
-    except Exception:
-        return False
+        got = writer.parse(rep.text)
+        expected = {'timeout': '60秒', 'condition': '仅工作日启用', 'reviewer': 'Priya', 'release': '每周四发布'}
+        facts = got.get('facts') or {}; suggestions = got.get('suggestions') or []
+        # 此处只对固定准入题评分，绝不拿关键词规则审核真实用户记忆。
+        good = all(re.sub(r'\s+', '', str(facts.get(k, ''))) == v for k, v in expected.items())
+        good = good and isinstance(suggestions, list) and len(suggestions) == 1
+        text = str(suggestions[0]) if suggestions else ''
+        good = good and '现场' in text and '日志' in text and '通知' not in text
+        row.update(quality_pass=good, input_tokens=rep.usage.get('input_tokens', 0),
+                   output_tokens=rep.usage.get('output_tokens', 0), cost=rep.usage.get('cost'))
+    except Exception as exc:
+        row['error'] = str(exc)[:160]
     finally:
+        row['seconds'] = max(0.001, round(time.monotonic() - started, 3))
         if old is None: os.environ.pop('HYPERTHYMESIA_MODEL', None)
         else: os.environ['HYPERTHYMESIA_MODEL'] = old
+    row['ok'] = _acceptable(row)
+    return row
 
 
 def choose(provider, refresh=False):
-    """该提供方当前最便宜且够用的模型；识别不出时返回空串（由调用方用宿主默认模型）。"""
+    """先用已有验收筛质量/速度/token，再比较价格；只有无可用验收时才做有限准入。"""
+    from .providers import ProviderError
     cache = _load(); c = cache.get(provider) or {}
     ids = [i for i in list_models(provider) if not SKIP.match(i)]
-    if c and not refresh and time.time() - c.get('at', 0) < TTL and c.get('ids') == ids and c.get('model'): return c['model']
+    evidence = [r for r in acceptance() if r.get('provider') == provider and r.get('model') in ids]
+    import hashlib
+    fingerprint = hashlib.sha256(json.dumps(evidence, sort_keys=True).encode()).hexdigest()
+    if (not refresh and c.get('selection_version') == SELECTION_VERSION and c.get('evidence') == fingerprint
+            and time.time() - c.get('at', 0) < TTL and c.get('ids') == ids and c.get('model')):
+        return c['model']
+    # 验收未过期时沿用；过期模型不靠旧小题结果继续放行。
+    recent = {}
+    for row in evidence:
+        try: age = time.time() - __import__('datetime').datetime.fromisoformat(row['at']).timestamp()
+        except (KeyError, ValueError): continue
+        if 0 <= age < TTL: recent.setdefault(row['model'], []).append(row)
+    # 同一模型任一已有质量/性能失败不能被另一次简单通过掩盖。
+    qualified = [m for m, rows in recent.items() if all(_acceptable(r) for r in rows)]
     price, source = prices(provider, ids, c.get('prices'))
-    order = sorted([i for i in ids if i in price], key=lambda i: price[i]) + \
-            (codex_affordable([i for i in ids if i not in price]) if provider == 'codex' else [])
-    chosen = ''; checked = []
-    for m in order:
-        ok = _probe(provider, m); checked.append({'model': m, 'ok': ok})
-        if ok: chosen = m; break
-    cache[provider] = {'model': chosen, 'at': time.time(), 'ids': ids, 'prices': price, 'source': source, 'checked': checked}
+    preferred = codex_affordable(ids) if provider == 'codex' else ids
+    order = sorted(preferred, key=lambda m: (m not in price, price.get(m, float('inf'))))
+    checked = [{'model': m, 'ok': all(_acceptable(r) for r in rows), 'source': '已有端到端验收'} for m, rows in recent.items()]
+    chosen = next((m for m in order if m in qualified), '')
+    if not chosen:
+        # 旧缓存若没有新标准的数据，不算准入通过；不再遍历整张模型表。
+        for m in [m for m in order if m not in recent][:MAX_CANDIDATES]:
+            row = _probe(provider, m); checked.append(dict(row, model=m))
+            if row['ok']: chosen = m; break
+    cache[provider] = {'model': chosen, 'at': time.time(), 'ids': ids, 'prices': price,
+                       'source': source, 'checked': checked, 'selection_version': SELECTION_VERSION, 'evidence': fingerprint}
     _save(cache)
+    if not chosen:
+        raise ProviderError('没有通过质量、速度和token准入的后台模型；积压保留。请查看 doctor 或明确配置已验收模型，不能回退到未验收默认模型。')
     return chosen
 
 
 def explain(provider):
-    """给 doctor 用：选中的模型与依据。"""
     c = _load().get(provider) or {}
-    if not c: return '尚未识别（第一次写入时自动识别）'
-    p = c.get('prices', {}).get(c.get('model'))
-    return '%s（依据：%s%s）' % (c.get('model') or '无可用模型', c.get('source', ''), '，价格 %s' % p if p is not None else '')
+    if not c: return '尚未识别（首次写入优先复用已有验收；无记录时最多2次准入请求）'
+    stale = c.get('selection_version') != SELECTION_VERSION
+    return '%s（%s；依据：%s）' % (c.get('model') or '无通过准入的模型',
+              '旧版缓存待重新评估，不直接沿用' if stale else '已按质量、速度、token筛选', c.get('source', ''))
 
 
 def forget(provider):

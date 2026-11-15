@@ -3,13 +3,15 @@
 给 AI agent 用的长期记忆。接入后，你在 Claude Code、Codex、WorkBuddy、Qoder、DeepSeek Harness 里说过的事实、做过的决定、
 代码里定下的约定，新开会话时 agent 依然记得，不用再交代一遍。
 
-- 记忆存在你电脑上（`~/.hyperthymesia/`），不上传；密码、密钥会先遮盖。
-- 后台自动整理，用你 agent 自己最便宜的模型和额度，约占 agent 花费的 1%–2%。
+- 记忆库存在你电脑上（`~/.hyperthymesia/`）；后台整理时，相关材料会发送给宿主使用的模型，密码、密钥先做遮盖。
+- 后台自动整理，用你 agent 自己最便宜且通过能力检查的模型和额度；额外花费取决于对话和宿主，尚无一周真实使用数据，不承诺固定比例。
 - 个人的事所有项目通用；每个项目的约定只在该项目里可见。
 
 ## 接入步骤
 
-找到你用的 agent，只按那一节一步步做（约 3 分钟）。用多个 agent 就每一节各做一遍。
+找到你用的 agent，只按那一节一步步做。用多个 agent 就每一节各做一遍。
+
+当前发行版为 **v0.2.4**。macOS 命令行已做兼容测试；IDE／桌面真实问答和 Windows 安装链路尚未全部验收。**WorkBuddy 桌面入口修复仅在源码中，下面的一键下载暂时不包含修复。**
 
 - [Claude Code](#claude-code)
 - [Codex](#codex)
@@ -49,7 +51,7 @@
 hyperthymesia doctor --agent claude
 ```
 
-“写入提供方”后面显示 `claude` 就说明接入成功。之后正常使用 Claude Code 即可，什么都不用管。
+“写入提供方”应显示 `claude`。这只确认整理提供方；还需要确认 MCP 已连接、钩子实际触发。完整检查步骤见[兼容核查清单](docs/desktop-compat.md)。
 
 ### Codex
 
@@ -86,9 +88,15 @@ hyperthymesia doctor --agent claude
 hyperthymesia doctor --agent codex
 ```
 
-“写入提供方”后面显示 `codex` 就说明接入成功。之后正常使用 Codex 即可，什么都不用管。
+“写入提供方”应显示 `codex`。这只确认整理提供方；还需要确认 MCP 已连接、钩子实际触发。完整检查步骤见[兼容核查清单](docs/desktop-compat.md)。
 
 ### WorkBuddy
+
+**桌面版已知局限（本机5.3.14实测）**：退出时结束钩子不能可靠送达，未达到批量阈值的尾部可能要等下次进入会话、触发启动钩子后才自动补写。仅打开应用停在首页不保证触发；补写完成前，新会话可能答不出尾部信息。已入库记忆的读取不受此问题直接影响。暂不增加补丁，详见[兼容记录](docs/desktop-compat.md)。
+
+**最新桌面验收未通过**：真实使用暴露出后台整理请求被自身钩子记录、引发递归整理的问题。本机已暂停记忆钩子。源码现已加入统一内部任务隔离，64 项无模型测试与真实后台 CLI 标记传递验证通过，但桌面完整读写尚未重新验收；暂不恢复旧积压。详见[兼容报告最新状态](docs/desktop-compat.md)。
+
+**发布状态：桌面入口已在源码修复，尚未发布。下列一键命令目前仍下载 v0.2.4，不能安装这次桌面修复；发行包用户请等包含修复的新版本。**
 
 **1. 安装并接入**
 
@@ -118,7 +126,11 @@ hyperthymesia doctor --agent codex
 hyperthymesia doctor --agent workbuddy
 ```
 
-“写入提供方”后面显示 `codebuddy`（WorkBuddy 内置的就是 CodeBuddy） 就说明接入成功。之后正常使用 WorkBuddy 即可，什么都不用管。
+“写入提供方”应显示 `codebuddy`（WorkBuddy 内置的就是 CodeBuddy）。这只检查整理配置；还要在 WorkBuddy 的 MCP 设置里确认 `hyperthymesia` 连接成功。
+
+桌面版配置写入 `~/.workbuddy/settings.json` 和 `~/.workbuddy/mcp.json`，原文件会先备份；已有 CodeBuddy CLI 配置保留。若要单独给 CLI 接入，执行 `hyperthymesia install codebuddy`。
+
+上述桌面路径是修复后的行为；v0.2.4 旧版使用的是 CLI 入口。两者不能混作同一种接入结果。
 
 ### Qoder
 
@@ -161,7 +173,7 @@ qodercli login
 hyperthymesia doctor --agent qoder
 ```
 
-“写入提供方”后面显示 `qoder` 就说明接入成功。之后正常使用 Qoder 即可，什么都不用管。
+“写入提供方”应显示 `qoder`。这只确认整理提供方；还需要确认 MCP 已连接、钩子实际触发。完整检查步骤见[兼容核查清单](docs/desktop-compat.md)。
 
 ### DeepSeek Harness（dsh）
 
@@ -198,7 +210,7 @@ hyperthymesia doctor --agent qoder
 hyperthymesia doctor --agent dsh
 ```
 
-“写入提供方”后面显示 `dsh` 就说明接入成功。之后正常使用 DeepSeek Harness（dsh） 即可，什么都不用管。
+“写入提供方”应显示 `dsh`。这只确认整理提供方；还需要确认 MCP 已连接、钩子实际触发。完整检查步骤见[兼容核查清单](docs/desktop-compat.md)。
 
 ### 遇到问题
 
@@ -218,7 +230,7 @@ hyperthymesia import --agent 你的agent --session 会话编号
 
 （`--all --days 7` 导入最近 7 天全部会话；只能补回对话，补不回当时的代码改动。）
 
-**只在某个项目里试用**：`hyperthymesia install 你的agent --project 项目目录`（agent 名：claude、codex、workbuddy、qoder、dsh）。
+**只在某个项目里试用**：`hyperthymesia install 你的agent --project 项目目录`（支持 claude、codex、codebuddy、workbuddy、qoder）。dsh 按 profile 接入，不提供项目级安装隔离。
 
 **用 API key 整理记忆**（一般不需要：会自动沿用 agent 里已配的 key；只有想让整理走另一个 API 时才配）：
 新建 `~/.hyperthymesia/config.toml`，写入：
@@ -233,15 +245,15 @@ api_key_env = "DEEPSEEK_API_KEY"         # 只写环境变量名，key 本身放
 
 **升级**：重新执行你那一节第 1 步的命令即可（会覆盖程序并重新接入，记忆保留）。
 
-**卸载**：`hyperthymesia uninstall 你的agent`（还原原配置）。删除 `~/.hyperthymesia/` 即清空全部记忆。
+**卸载**：`hyperthymesia uninstall 你的agent`（移除本工具配置，保留其他条目；备份用于需要时手动恢复）。删除 `~/.hyperthymesia/` 即清空全部记忆。
 
 ## 常用命令
 
 | 命令 | 作用 |
 |---|---|
 | `install <agent> [--project 目录]` | 接入 agent（原配置先备份） |
-| `uninstall <agent> [--project 目录]` | 移除接入，还原原配置 |
-| `doctor [--agent X]` | 自检：该 agent 用哪个模型整理、是否可用 |
+| `uninstall <agent> [--project 目录]` | 移除本工具配置，保留其他条目 |
+| `doctor [--agent X]` | 查看整理提供方和模型；不证明钩子、MCP、召回全链路通过 |
 | `context [目录]` | 查看该目录下会注入给 agent 的记忆 |
 | `write` | 立即整理积压对话（平时后台自动） |
 | `import --list` / `import --agent X --session 编号` | 导入接入前的会话 |
@@ -256,3 +268,35 @@ agent 的最终回复和本轮代码改动；积压够多或会话结束时，�
 
 - 只用 Python 标准库；测试：`python3 -m unittest discover -s tests -v`
 - 推送到 main 后，GitHub Actions 在各系统上测试、用 PyInstaller 打出单文件并冒烟测试；推送 `v*` 标签时自动发布到 Releases。
+
+
+## IDE 与桌面版验证
+
+各界面的配置路径、接入缺口、简短操作清单及项目覆盖钩子的行为，见 [IDE／桌面兼容核查](docs/desktop-compat.md)。CLI 已通过不等于桌面版已通过；WorkBuddy 桌面配置入口与内置 CLI 默认入口不同，源码已分开适配，桌面短测核心事实写入与召回已通过，耗时、模型偏差和退出尾写局限见兼容记录；不代表全部GUI分支已验收。
+
+
+## 当前验证结果与待办
+
+配置文件存在、doctor 显示提供方、MCP 连通，分别只证明对应环节；都不能单独证明记忆完整接入。详细步骤、证据和版本见[兼容核查](docs/desktop-compat.md)。
+
+### 项目配置覆盖／禁用钩子（S9）
+
+以下检查未提交模型问答任务，不消耗模型额度。
+
+| 宿主 | 已验证 | 仍未验证或发现的问题 |
+| --- | --- | --- |
+| Claude Code CLI | 用户与项目启动钩子合并；项目空表不清除用户钩子；项目禁用能阻止启动钩子 | 不能据此覆盖所有 GUI 与生命周期事件 |
+| Qoder CLI | 合并通过；两种禁用方式均在正常状态栏下不触发启动钩子，重新开启恢复 | 不等于 IDE 与所有事件已完整验收 |
+| WorkBuddy 内置 CLI（桌面配置目录） | 合并、MCP 握手及轮次记录通过；已定位关闭失效的根因 | **本机 5.3.14 内置执行器未检查 disableAllHooks**；七类事件派发代码回放均忽略此键，桌面两轮写入及新会话召回核心事实7/7；快捷验收仅部分通过（详见兼容记录） |
+| Codex | 无模型固定 HTTP 响应验证开→关→再开；提交／停止实际记录为 1→0→1 | 不代表全部事件和 GUI 已通过；新钩子仍须审核信任 |
+| dsh | 独立 profile 的合成配置确认显式 --patch 能禁用条目；项目目录单放补丁不会自动加载 | 不等于全部运行事件测试通过 |
+
+### 尚未完成
+
+- **一周真实使用**：正常工作中观察记错、漏记、多记及注入量，每隔两三天检查记忆库和整理日志。目前没有长期实用结论。
+- **GUI 完整验收**：Claude VS Code／JetBrains／Desktop Code、Codex IDE／App、Qoder IDE／JetBrains、CodeBuddy IDE、WorkBuddy 桌面及 dsh TUI；不能沿用 CLI 或 dsh web 的通过结论。每种形态的简短操作见兼容清单。
+- **S9 环境缺项**：独立 CodeBuddy IDE 本机未安装，仍无实机结果。Qoder 禁用、Codex 提交／停止已补验。WorkBuddy 开关失效已归为宿主已知问题，不列为记忆服务待修复项，不增加补丁；它影响用户停用钩子，不妨碍正常开启时的记忆流程，也不能代替桌面完整读写验收。详细证据见[兼容报告 §6](docs/desktop-compat.md#6-s9-剩余项收尾与-workbuddy-根因2026-11-15最新结果)。
+- **Windows 端到端**：已有单元测试与 CI，尚未验证真实一键安装、宿主钩子触发、记录和注入。可先用假整理模型做不耗额度的 Windows 集成测试。
+- **发布本轮修复**：桌面入口、模型倍率目录及 doctor 的修复已在源码，59 项单元测试通过；尚未提交、构建并发布新版。一键下载仍是 v0.2.4。
+
+可选后续：v0.2.4 全量回归、Gitee 附件匿名下载验证。无用的本地／远端 v0.2.0 标签已删除。任何需要正常模型回合的测试，执行前先报额度预估。

@@ -1,0 +1,53 @@
+{
+  "schema": 1,
+  "observations": [
+    {
+      "provider": "codebuddy",
+      "model": "glm-5.3-flash",
+      "at": "2026-11-14T22:00:54+08:00",
+      "quality_pass": true,
+      "quality_scope": "已有端到端核心事实验收；GLM读取修复后3/3，HY4本次7/7；不代表覆盖所有条件、更正或新提示",
+      "source": "docs/model-selection-acceptance.md#historical-observations",
+      "seconds": 39.4,
+      "input_tokens": 6143,
+      "output_tokens": 1871,
+      "calls": 1
+    },
+    {
+      "provider": "codebuddy",
+      "model": "glm-5.3-flash",
+      "at": "2026-11-14T22:02:43+08:00",
+      "quality_pass": true,
+      "quality_scope": "已有端到端核心事实验收；GLM读取修复后3/3，HY4本次7/7；不代表覆盖所有条件、更正或新提示",
+      "source": "docs/model-selection-acceptance.md#historical-observations",
+      "seconds": 87.5,
+      "input_tokens": 27383,
+      "output_tokens": 5426,
+      "calls": 3
+    },
+    {
+      "provider": "codebuddy",
+      "model": "glm-5.3-flash",
+      "at": "2026-11-14T22:03:04+08:00",
+      "quality_pass": true,
+      "quality_scope": "已有端到端核心事实验收；GLM读取修复后3/3，HY4本次7/7；不代表覆盖所有条件、更正或新提示",
+      "source": "docs/model-selection-acceptance.md#historical-observations",
+      "seconds": 21.2,
+      "input_tokens": 32132,
+      "output_tokens": 3413,
+      "calls": 2
+    },
+    {
+      "provider": "codebuddy",
+      "model": "hy4free",
+      "at": "2026-11-15T20:49:58+08:00",
+      "quality_pass": true,
+      "quality_scope": "已有端到端核心事实验收；GLM读取修复后3/3，HY4本次7/7；不代表覆盖所有条件、更正或新提示",
+      "source": "docs/model-selection-acceptance.md#historical-observations",
+      "seconds": 603.9,
+      "input_tokens": 6062,
+      "output_tokens": 41691,
+      "calls": 2
+    }
+  ]
+}

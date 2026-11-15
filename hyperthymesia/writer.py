@@ -14,7 +14,8 @@ from pathlib import Path
 from . import providers
 from .redact import redact
 
-RULES = (Path(__file__).parent / 'rules' / 'writer.txt').read_text(encoding='utf-8')
+SUGGESTION_POLICY = (Path(__file__).parent / 'rules' / 'suggestions.txt').read_text(encoding='utf-8').strip()
+RULES = (Path(__file__).parent / 'rules' / 'writer.txt').read_text(encoding='utf-8').replace('{{SUGGESTION_POLICY}}', SUGGESTION_POLICY)
 ALL_LIMIT = 8000          # 两库有效事实总字数低于此值时附上全部旧记录
 SPLIT_AT = 12             # 对象有效事实超过此数标“过大”
 MAX_CALLS = 4             # 主写（含补发后的增量回答）最多调用次数
@@ -23,7 +24,7 @@ CONFLICT_CAP = 40
 DELTA_ASK = ('请只回复需要变更的部分（同样的JSON格式）：新增的条目放memories/replacements/objects等字段；此前已交的memories中若有某条应改为更正上面的旧记录，'
              '在replacements里给出更正，并在"withdraw"里列出那条原memories的title。此前已交且无需变动的内容不要重复，程序会原样保留。没有任何变化就回复{}。')
 GAP_NOTE = ('（补漏）下面几轮在本批整理时，用户本人的事实或决定没有被记下。按与主整理完全相同的规则和口径重新判断这几轮，不要因为是补漏而放宽标准：'
-            '用户说出的事实、决定、要求和数值完整保存；助手的讲解、方案、建议每轮最多概括成一条suggestion（一句话），不逐条展开。'
+            '用户说出的事实、决定、要求和数值完整保存。' + SUGGESTION_POLICY +
             '特别检查用户在请求前顺带交代的事实（如“车险5月20日到期，准备…”“年糕是英短，3岁，我下周…”）。已在旧记录里的不要重复。'
             '这几轮若没有需要补记的用户事实或决定，回复{}。')
 
@@ -158,7 +159,9 @@ class Batch:
         self.state.execute('INSERT OR REPLACE INTO writer_sessions VALUES(?,?,?,?)', (k, providers.name(), sid, last_input))
 
     def ask(self, prompt, sid=None):
+        started = time.monotonic()
         rep = providers.call(self.home, RULES, prompt, sid, self.log)
+        self.log.append({'step': 'model_usage', 'seconds': round(time.monotonic() - started, 3), 'usage': dict(rep.usage)})
         self.calls += 1; self.usage.append(rep.usage)
         self.answers.append(rep.text)   # 原始回答，便于排查（不含凭据：材料已脱敏）
         return rep

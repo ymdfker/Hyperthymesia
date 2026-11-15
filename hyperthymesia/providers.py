@@ -14,6 +14,8 @@ import json, os, shutil, subprocess, tempfile, uuid
 from collections import namedtuple
 from pathlib import Path
 
+from .execution import internal_env
+
 Reply = namedtuple('Reply', 'sid text usage')
 DEFAULT_MODEL = {'codex': 'gpt-5.6-luna', 'claude': 'claude-haiku-5-5', 'codebuddy': 'glm-5.3-flash'}
 
@@ -41,6 +43,12 @@ def model():
     return m or DEFAULT_MODEL.get(name(), '')
 
 
+def _run_cli(cmd, **kwargs):
+    """整理、补漏、冲突检查和模型试探统一走内部调用边界。"""
+    kwargs['env'] = internal_env(kwargs.get('env'))
+    return subprocess.run(cmd, **kwargs)
+
+
 def _workdir(home):
     d = Path(home) / 'writer_work'; d.mkdir(parents=True, exist_ok=True); return d   # 空目录：命令行不会读到任何项目文件
 
@@ -61,7 +69,7 @@ def _codex(home, system, prompt, sid, log):
             '-c', 'skills.include_instructions=false', '-c', 'tools.update_plan.enabled=false',
             '--json', '--skip-git-repo-check', '--ignore-user-config', '-o', str(out)]
     cmd = [exe, 'exec'] + (['resume'] + base + [sid, '-'] if sid else base + ['-s', 'read-only', '-'])
-    r = subprocess.run(cmd, input=prompt, capture_output=True, text=True, encoding='utf-8', errors='replace',
+    r = _run_cli(cmd, input=prompt, capture_output=True, text=True, encoding='utf-8', errors='replace',
                        cwd=_workdir(home), timeout=1800)
     ev = []
     for l in r.stdout.splitlines():
@@ -83,7 +91,7 @@ def _claude(home, system, prompt, sid, log):
     cmd = [exe, '-p', '--model', model(), '--output-format', 'json', '--tools', '', '--setting-sources', 'project',
            '--strict-mcp-config', '--system-prompt', system] + (['--resume', sid] if sid else [])
     env = {k: v for k, v in os.environ.items() if not k.startswith(('CLAUDECODE', 'CLAUDE_CODE_'))}   # 钩子拉起的写入器是独立会话
-    r = subprocess.run(cmd, input=prompt, capture_output=True, text=True, encoding='utf-8', errors='replace',
+    r = _run_cli(cmd, input=prompt, capture_output=True, text=True, encoding='utf-8', errors='replace',
                        cwd=_workdir(home), timeout=1800, env=env)
     try: o = json.loads(r.stdout)
     except ValueError: raise ProviderError('claude 输出无法解析：' + (r.stderr or r.stdout)[-400:])
@@ -100,7 +108,7 @@ def _codebuddy(home, system, prompt, sid, log):
     if not exe: raise ProviderError('找不到 codebuddy 命令行（WorkBuddy 安装包里自带一份）')
     cmd = [exe, '-p', '--output-format', 'json', '--tools', '', '--strict-mcp-config', '--system-prompt', system] + \
           (['--model', model()] if model() else []) + (['--resume', sid] if sid else [])
-    r = subprocess.run(cmd, input=prompt, capture_output=True, text=True, encoding='utf-8', errors='replace', cwd=_workdir(home), timeout=1800)
+    r = _run_cli(cmd, input=prompt, capture_output=True, text=True, encoding='utf-8', errors='replace', cwd=_workdir(home), timeout=1800)
     try: o = json.loads(r.stdout)
     except ValueError: raise ProviderError('codebuddy 输出无法解析：' + (r.stderr or r.stdout)[-400:])
     credit = None
@@ -137,7 +145,7 @@ def _openai(home, system, prompt, sid, log):
 
 def _one_shot_cli(home, cmd, prompt):
     """不支持系统提示和会话续接的命令行：规则拼在请求前面，每次都是新会话。"""
-    r = subprocess.run(cmd, input=prompt, capture_output=True, text=True, encoding='utf-8', errors='replace',
+    r = _run_cli(cmd, input=prompt, capture_output=True, text=True, encoding='utf-8', errors='replace',
                        cwd=_workdir(home), timeout=1800)
     if r.returncode: raise ProviderError('%s 调用失败：%s' % (cmd[0], (r.stderr or r.stdout)[-400:]))
     return r.stdout
@@ -159,7 +167,7 @@ def _qoder(home, system, prompt, sid, log):
     if not cmd0: raise ProviderError('找不到 qodercli（npm install -g @qoder-ai/qodercli，然后 qodercli login）')
     cmd = cmd0 + ['-p', '-o', 'json', '--tools', '', '--strict-mcp-config', '--system-prompt', system] + \
           (['--model', model()] if model() else []) + (['--resume', sid] if sid else [])
-    r = subprocess.run(cmd, input=prompt, capture_output=True, text=True, encoding='utf-8', errors='replace', cwd=_workdir(home), timeout=1800)
+    r = _run_cli(cmd, input=prompt, capture_output=True, text=True, encoding='utf-8', errors='replace', cwd=_workdir(home), timeout=1800)
     lines = [l for l in (r.stdout or '').splitlines() if l.strip().startswith('{')]
     try: o = json.loads(lines[-1])
     except (ValueError, IndexError): raise ProviderError('qodercli 输出无法解析：' + (r.stderr or r.stdout)[-400:])
