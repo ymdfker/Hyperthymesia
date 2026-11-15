@@ -1,6 +1,6 @@
 # Hyperthymesia
 
-给 AI agent 用的长期记忆。接入后，你在 Claude Code、Codex、WorkBuddy、Qoder 里说过的事实、做过的决定、
+给 AI agent 用的长期记忆。接入后，你在 Claude Code、Codex、WorkBuddy、Qoder、DeepSeek Harness 里说过的事实、做过的决定、
 代码里定下的约定，新开会话时 agent 依然记得，不用再交代一遍。
 
 - 记忆存在你电脑上（`~/.hyperthymesia/`），不上传；密码、密钥会先遮盖。
@@ -11,7 +11,7 @@
 
 ### 第 1 步：安装并接入（一行命令）
 
-把命令末尾的 `claude` 换成你用的 agent：`claude`、`codex`、`workbuddy`、`qoder`；用多个就空格隔开写多个。
+把命令末尾的 `claude` 换成你用的 agent：`claude`、`codex`、`workbuddy`、`qoder`、`dsh`（DeepSeek Harness）；用多个就空格隔开写多个。
 
 **macOS / Linux**：打开“终端”，粘贴执行：
 
@@ -34,6 +34,7 @@ $env:HY_AGENTS="claude"; irm https://github.com/ymdfker/Hyperthymesia/releases/l
 | Claude Code、WorkBuddy | 无 |
 | Codex | 在 Codex 里输入 `/hooks`，批准 hyperthymesia |
 | Qoder | 按屏幕提示执行一次 `qodercli login` |
+| DeepSeek Harness | 确认已在 dsh 的模型设置里填好 DeepSeek API key |
 
 ### 第 3 步：重启 agent
 

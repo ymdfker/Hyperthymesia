@@ -35,7 +35,7 @@ def model():
     """配置/环境变量指定的模型优先；否则自动识别该提供方最便宜且够用的模型（缓存一周），识别不出才用默认。"""
     m = settings()['model']
     if m: return m
-    if name() in ('codex', 'claude', 'codebuddy', 'qoder'):
+    if name() in ('codex', 'claude', 'codebuddy', 'qoder', 'dsh'):
         from . import models
         m = models.choose(name())
     return m or DEFAULT_MODEL.get(name(), '')
@@ -171,10 +171,18 @@ def _qoder(home, system, prompt, sid, log):
 
 
 def _dsh(home, system, prompt, sid, log):
+    """dsh 无头模式：一次性回答后把最终回复写到 stdout。用补丁层把模型固定为 DeepSeek 官方最便宜的模型，
+    并停用 settings 插件——否则用户在 dsh 里选过的默认模型（settings.yaml）会盖过补丁。key 由 dsh 自己的凭据层读取。"""
     exe = shutil.which('dsh')
     if not exe: raise ProviderError('找不到 dsh 命令')
-    text = _one_shot_cli(home, [exe, '--profile', 'headless', system + '\n\n' + prompt], '')   # 无头模式只把最终回答写到 stdout
-    return Reply(None, text, {'input_tokens': 0, 'cached_input_tokens': 0, 'output_tokens': 0})   # 不报告用量
+    m = model()
+    patch = _workdir(home) / 'dsh-writer.yml'
+    want = ('- id: settings\n  disabled: true\n' +
+            ('- id: agent-default-model\n  config:\n    provider: deepseek-official\n    model: %s\n' % json.dumps(m) if m else ''))
+    if not patch.exists() or patch.read_text(encoding='utf-8') != want: patch.write_text(want, encoding='utf-8')
+    text = _one_shot_cli(home, [exe, '--profile', 'headless', '--patch', str(patch), system + '\n\n' + prompt], '')
+    log.append({'step': 'dsh_call', 'model': m, 'prompt_chars': len(prompt)})
+    return Reply(None, text, {'input_tokens': 0, 'cached_input_tokens': 0, 'output_tokens': 0})   # 无头模式不报告用量
 
 
 FAKE_REPLIES = []   # 测试用：依次弹出的回答文本；可为函数 f(prompt) -> text

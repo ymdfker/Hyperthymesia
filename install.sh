@@ -1,7 +1,7 @@
 #!/bin/sh
 # Hyperthymesia 一键安装（macOS / Linux）：
 #   curl -fsSL https://github.com/ymdfker/Hyperthymesia/releases/latest/download/install.sh | sh -s -- claude
-# 末尾的 agent 名（claude / codex / workbuddy / qoder，可写多个）可省略；写了就顺带接入这些 agent。
+# 末尾的 agent 名（claude / codex / workbuddy / qoder / dsh，可写多个）可省略；写了就顺带接入这些 agent。
 set -e
 REPO=ymdfker/Hyperthymesia
 case "$(uname -s)-$(uname -m)" in

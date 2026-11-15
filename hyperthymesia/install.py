@@ -203,7 +203,85 @@ def trae(project=None, remove=False):
     return [hp, mp]
 
 
-AGENTS = {'trae': trae, 'claude': claude, 'codex': codex, 'workbuddy': codebuddy, 'codebuddy': codebuddy, 'qoder': qoder}   # workbuddy 与 codebuddy 同一套（WorkBuddy 底层是 CodeBuddy）
+DSH_HOOKS_PKG = '@deepseek-ai/dsh-hooks-claude-code'
+DSH_PKGS = [DSH_HOOKS_PKG, '@deepseek-ai/dsh-hook-protocol']   # 桥接插件依赖 hook-protocol，dsh 本体没带
+
+
+def dsh_home():
+    return Path(os.environ.get('DSH_HOME') or Path(os.environ.get('HOME') or Path.home()) / '.dsh')
+
+
+def _dsh_profiles():
+    """要接入的 dsh 交互 profile（web、tui 等）；headless 是写入器自己用的无头模式，不装钩子，避免写入时又触发钩子。"""
+    d = dsh_home() / 'profiles'
+    return [p for p in sorted(d.iterdir()) if p.is_dir() and p.name not in ('node_modules', 'headless') and (p / 'package.json').exists()] if d.exists() else []
+
+
+def _yaml_q(v): return json.dumps(str(v), ensure_ascii=False)   # JSON 字符串即合法的 YAML 双引号字符串
+
+
+def dsh(project=None, remove=False):
+    """DeepSeek Harness：钩子由官方桥接插件 dsh-hooks-claude-code 运行（Claude Code 格式的 hooks.json，放在本框架目录）；
+    MCP 用 dsh 自带的 dsh-mcp-client。两者以带标记的一段 insert 追加到每个交互 profile 的 cordis.patch.yml（用户层补丁）。
+    不写 $DSH_HOME/cordis.patch.yml：那一层对 headless 也生效，写入器会递归触发钩子。"""
+    from . import paths
+    hp = paths.home() / 'dsh-hooks.json'
+    if not remove:
+        hooks = {ev: [{'hooks': [{'type': 'command', 'command': _cmd('hook', name, '--agent', 'dsh'), 'timeout': 60}]}]
+                 for ev, name in CODEX_EVENTS.items()}   # 桥接只支持 SessionStart / UserPromptSubmit / Stop 等，没有压缩前与会话结束
+        _save(hp, {'hooks': hooks})
+    elif hp.exists(): hp.unlink()
+    profiles = _dsh_profiles()
+    if not remove and not profiles:
+        raise SystemExit('没有找到 dsh 的 profile（%s/profiles）：请先运行一次 dsh web' % dsh_home())
+    c = self_cmd(); out = [hp]
+    for prof in profiles:
+        pp = prof / 'cordis.patch.yml'
+        text = pp.read_text(encoding='utf-8') if pp.exists() else ''
+        a, b = text.find(MARK_BEGIN), text.find(MARK_END)
+        if a >= 0 and b > a: text = text[:a].rstrip('\n') + '\n' + text[b + len(MARK_END):].lstrip('\n')
+        body = [l for l in text.splitlines() if l.strip() and not l.lstrip().startswith('#')]
+        if not remove:
+            missing = [k for k in DSH_PKGS if not (prof / 'node_modules' / k).exists()]
+            if missing:
+                print('正在为 dsh 的 %s profile 安装官方钩子桥接插件 ……' % prof.name)
+                env = dict(os.environ)
+                if not shutil.which('pnpm') and shutil.which('npx'):   # dsh plugin 需要 pnpm；没装时用 npx 临时调用官方 pnpm，不做全局安装
+                    shim = paths.home() / 'pnpm-shim'; shim.mkdir(parents=True, exist_ok=True)
+                    if os.name == 'nt': (shim / 'pnpm.cmd').write_text('@npx -y pnpm@10 %*\r\n', encoding='utf-8')
+                    else: (shim / 'pnpm').write_text('#!/bin/sh\nexec npx -y pnpm@10 "$@"\n', encoding='utf-8'); (shim / 'pnpm').chmod(0o755)
+                    env['PATH'] = str(shim) + os.pathsep + env.get('PATH', '')
+                for k in missing: _run_quiet([shutil.which('dsh') or 'dsh', 'plugin', '--profile', prof.name, 'add', k], env=env)
+                if any(not (prof / 'node_modules' / k).exists() for k in DSH_PKGS):
+                    raise SystemExit('dsh 钩子桥接插件安装失败：请先安装 pnpm（npm install -g pnpm）后重试')
+            if [l.strip() for l in body] == ['[]']:   # 空补丁写成流式 [] 时，后面不能再接块列表
+                text = '\n'.join(l for l in text.splitlines() if l.strip() != '[]')
+            # 钩子插件放进一个组，组内单独挂一个本机 shell（isolate）：dsh 默认 shell 是沙箱，只许写项目目录，
+            # 钩子要写 ~/.hyperthymesia；隔离后只影响本组，agent 自己执行的命令仍在沙箱里（已实测）
+            block = '\n'.join([MARK_BEGIN, '- insert:',
+                               '    - id: hyperthymesia', "      name: '@deepseek-ai/cordis-plugin-group'", '      group: true',
+                               '      isolate:', '        shell: true', '      config:',
+                               '        - id: shell', "          name: '@deepseek-ai/dsh-bash-local'",
+                               '        - id: hooks', "          name: '%s'" % DSH_HOOKS_PKG,
+                               '          config:', '            configPath: ' + _yaml_q(hp),
+                               '    - id: hyperthymesia-mcp', "      name: '@deepseek-ai/dsh-mcp-client'",
+                               '      config:', '        serverName: hyperthymesia', '        transport: stdio',
+                               '        command: ' + _yaml_q(c[0]),
+                               '        args: [%s]' % ', '.join(_yaml_q(x) for x in c[1:] + ['serve']), MARK_END])
+            text = text.rstrip('\n') + '\n\n' + block + '\n'
+        elif not [l for l in text.splitlines() if l.strip() and not l.lstrip().startswith('#')]:
+            text = text.rstrip('\n') + '\n[]\n'
+        pp.parent.mkdir(parents=True, exist_ok=True); _backup(pp); pp.write_text(text, encoding='utf-8'); out.append(pp)
+    return out
+
+
+def dsh_writer_check():
+    """dsh 写入用 DeepSeek 官方最便宜的模型、用户在 dsh 里存的 DeepSeek key（由 dsh 自己读取，本框架不碰 key）。"""
+    if not shutil.which('dsh'): return '找不到 dsh 命令：记忆可以读取，但无法整理。'
+    return '写入将借用 dsh 的无头模式，用 DeepSeek 官方最便宜的模型和你在 dsh 里配置的 DeepSeek key。'
+
+
+AGENTS = {'dsh': dsh, 'trae': trae, 'claude': claude, 'codex': codex, 'workbuddy': codebuddy, 'codebuddy': codebuddy, 'qoder': qoder}   # workbuddy 与 codebuddy 同一套（WorkBuddy 底层是 CodeBuddy）
 
 
 def run(argv, remove=False):
@@ -216,6 +294,8 @@ def run(argv, remove=False):
     if argv[0] == 'trae' and not remove:
         print('请在 Trae 的“设置 → Hooks”里打开钩子开关，并重启 Trae（新钩子默认不运行）。')
         print(trae_writer_check())
+    if argv[0] == 'dsh' and not remove:
+        print(dsh_writer_check())
     if argv[0] == 'qoder' and not remove:
         print(qoder_writer_check())
     if argv[0] == 'codex' and not remove:

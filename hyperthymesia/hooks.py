@@ -8,7 +8,7 @@
 
 钩子绝不能打断宿主的这一轮：任何异常只写日志，输出空结果。
 宿主差异（字段名、会话记录格式、输出格式）由 ADAPTERS 处理。"""
-import json, os, subprocess, sys, time
+import json, os, shutil, subprocess, sys, time
 from pathlib import Path
 
 from . import changes, paths, reader
@@ -63,6 +63,68 @@ def _codebuddy_final(transcript):
     return last
 
 
+_UNZSTD_JS = r"""const z=require('zlib'),fs=require('fs');const b=fs.readFileSync(process.argv[1]);const M=Buffer.from([0x28,0xb5,0x2f,0xfd]);
+const p=[];let i=b.indexOf(M);while(i>=0){p.push(i);i=b.indexOf(M,i+1)}p.push(b.length);const o=[];
+for(let k=0;k<p.length-1;k++){try{o.push(z.zstdDecompressSync(b.subarray(p[k],p[k+1])))}catch(e){}}process.stdout.write(Buffer.concat(o));"""
+
+
+_NODE = []
+
+
+def dsh_node():
+    """能解压 zstd 的 node（Node 22.15+）。dsh 可能是软链接或自写的启动脚本，系统默认 node 也可能是旧版本，
+    所以依次试：dsh 旁边与其真实安装前缀里的 node、PATH 上的 node、nvm / fnm 装的各版本（新的优先），取第一个带 zstd 的。"""
+    if _NODE: return _NODE[0]
+    cands = []
+    exe = shutil.which('dsh')
+    if exe:
+        real = Path(exe).resolve()
+        for d in [Path(exe).parent, real.parent] + [q.parent.parent for q in real.parents if q.name == 'node_modules']:
+            cands += [d / 'bin' / 'node', d / 'node', d / 'node.exe']
+    if shutil.which('node'): cands.append(Path(shutil.which('node')))
+    home = Path(os.environ.get('HOME') or Path.home())
+    for pat in ('.nvm/versions/node/*/bin/node', 'Library/Application Support/fnm/node-versions/*/installation/bin/node',
+                '.local/share/fnm/node-versions/*/installation/bin/node'):
+        cands += sorted(home.glob(pat), reverse=True)
+    for n in cands:
+        if not n.is_file(): continue
+        try:
+            r = subprocess.run([str(n), '-e', "process.exit(require('zlib').zstdDecompressSync?0:1)"], capture_output=True, timeout=20)
+        except (OSError, subprocess.SubprocessError): continue
+        if r.returncode == 0: _NODE.append(str(n)); return str(n)
+    return None
+
+
+def dsh_read(transcript):
+    """dsh 会话记录 session.jsonl.zstd：多个 zstd 帧拼接（Node 一次只解第一帧），逐帧解压；Python 3.12 标准库没有 zstd，借 dsh 的 node。"""
+    node = dsh_node()
+    if not node: return ''
+    r = subprocess.run([node, '-e', _UNZSTD_JS, str(transcript)], capture_output=True, timeout=60)
+    return r.stdout.decode('utf-8', 'replace')
+
+
+def dsh_turns(text):
+    """[(时间, 用户原话, 最终回复)], 工作目录。用户原话是 source.kind=user 的 user/message；钩子注入的上下文 kind=plugin，不算。"""
+    turns = []; cwd = None; cur = None
+    for l in text.splitlines():
+        try: e = json.loads(l)
+        except ValueError: continue
+        t = e.get('type'); d = e.get('data') or {}
+        if t == 'session': cwd = e.get('cwd')
+        elif t == 'user/message' and (d.get('source') or {}).get('kind') == 'user':
+            u = '\n'.join(c.get('text', '') for c in d.get('content') or [] if isinstance(c, dict) and c.get('type') == 'text').strip()
+            if u: cur = [time.strftime('%Y-%m-%dT%H:%M:%S', time.localtime(e.get('time', 0) / 1000)), u, '']; turns.append(cur)
+        elif t == 'assistant/message' and cur is not None:
+            a = '\n'.join(c.get('text', '') for c in (d.get('message') or {}).get('content') or [] if isinstance(c, dict) and c.get('type') == 'text').strip()
+            if a: cur[2] = a                                 # 一轮里最后一段文字即最终回复
+    return turns, cwd
+
+
+def _dsh_final(transcript):
+    turns, _ = dsh_turns(dsh_read(transcript))
+    return turns[-1][2] if turns else ''
+
+
 ADAPTERS = {
     # 宿主名: (取最终回复的函数, 注入输出格式)
     'claude': (_claude_final, lambda event, ctx: {'hookSpecificOutput': {'hookEventName': 'UserPromptSubmit', 'additionalContext': ctx}} if ctx else {}),
@@ -71,6 +133,8 @@ ADAPTERS = {
     'qoder': (_claude_final, lambda event, ctx: {'hookSpecificOutput': {'hookEventName': 'UserPromptSubmit', 'additionalContext': ctx}} if ctx else {}),
     # Trae：钩子输入不带会话记录路径，Stop 直接带 last_assistant_message
     'trae': (lambda tp: '', lambda event, ctx: {'hookSpecificOutput': {'hookEventName': 'UserPromptSubmit', 'additionalContext': ctx}} if ctx else {}),
+    # DeepSeek Harness：官方桥接插件按 Claude Code 格式调用钩子；Stop 不带最终回复，会话记录是 zstd 压缩的
+    'dsh': (_dsh_final, lambda event, ctx: {'hookSpecificOutput': {'hookEventName': 'UserPromptSubmit', 'additionalContext': ctx}} if ctx else {}),
     'codex': (_codex_final, lambda event, ctx: {'hookSpecificOutput': {'hookEventName': 'UserPromptSubmit', 'additionalContext': ctx}} if ctx else {}),
 }
 
@@ -98,8 +162,9 @@ def on_prompt(d, agent):
     tp = d.get('transcript_path')
     if tp and Path(tp).exists():
         try:
-            if '长期记忆' not in Path(tp).read_text(encoding='utf-8', errors='replace'): reader.reset_session(st, sid)
-        except OSError: pass
+            text = dsh_read(tp) if agent == 'dsh' else Path(tp).read_text(encoding='utf-8', errors='replace')
+            if '长期记忆' not in text: reader.reset_session(st, sid)
+        except (OSError, subprocess.SubprocessError): pass
     elif agent in ALWAYS_FULL:
         reader.reset_session(st, sid)   # 无法确认上文是否还留着之前注入的记忆：每轮注入全文
     from .mcp_server import open_stores
@@ -158,6 +223,7 @@ def backlog_tokens(st, project):
 
 def self_cmd():
     """调用自身的命令行：打包后是可执行文件本身，源码运行时是 python -m hyperthymesia。"""
+    if os.environ.get('HYPERTHYMESIA_SELF'): return [os.environ['HYPERTHYMESIA_SELF']]   # 源码调试：指定一个包装脚本
     return [sys.executable] if getattr(sys, 'frozen', False) else [sys.executable, '-m', 'hyperthymesia']
 
 

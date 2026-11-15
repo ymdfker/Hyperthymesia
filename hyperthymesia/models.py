@@ -54,6 +54,8 @@ def list_models(provider):
             return [l.strip() for l in out.splitlines()[1:] if l.strip()]
         if provider == 'codex':
             return [m['slug'] for m in _codex_cache().get('models', []) if m.get('visibility', 'list') == 'list']
+        if provider == 'dsh' and shutil.which('dsh'):
+            return list(deepseek_prices())
         if provider == 'claude' and shutil.which('claude'):
             return ['haiku', 'sonnet', 'opus']
     except (OSError, ValueError, subprocess.SubprocessError):
@@ -81,6 +83,27 @@ def codebuddy_prices():
             c = re.fullmatch(r'x?\s*([0-9.]+)', str(m.get('credits', '')).strip())
             if m.get('id') and c: out[m['id']] = float(c.group(1))   # 较新的文件覆盖较旧的
     return out
+
+
+DEEPSEEK_PRICING = 'https://api-docs.deepseek.com/zh-cn/quick_start/pricing.md'
+
+
+def deepseek_prices():
+    """DeepSeek 官方价格页（Markdown 版）：表头行列出模型名（如 deepseek-flash(1)），取高峰时段“缓存未命中输入”与“输出”单价（元/百万 token），
+    按写入以输入为主 9:1 加权。dsh 的 deepseek-official 路由会把模型名原样传给官方接口，所以页面上的模型名就是可用模型。"""
+    try: md = _fetch(DEEPSEEK_PRICING)
+    except Exception: return {}
+    names = []; inp = {}; outp = {}
+    for line in md.splitlines():
+        cells = [c.strip() for c in line.strip().strip('|').split('|')]
+        if not names and len(cells) > 1 and re.fullmatch(r'模型|MODEL', cells[0]):
+            names = [re.sub(r'\(.*?\)', '', c).strip() for c in cells if re.match(r'deepseek', c, re.I)]
+        if not names or '高峰' not in line: continue
+        vals = [float(m) for m in re.findall(r'([0-9]+(?:\.[0-9]+)?)\s*元', line)][-len(names):]
+        if len(vals) != len(names): continue
+        if '未命中' in line: inp = dict(zip(names, vals))
+        elif '输出' in line: outp = dict(zip(names, vals))
+    return {n: inp[n] * 0.9 + outp[n] * 0.1 for n in names if n in inp and n in outp}
 
 
 def _fetch(url):
@@ -174,6 +197,9 @@ def prices(provider, ids, old):
                 c = measure(provider, m)
                 if c is not None: got[m] = c
         return got, '短请求实测（官方文档读取失败时的退路）'
+    if provider == 'dsh':
+        p = deepseek_prices()
+        return p, ('DeepSeek 官方价格页' if p else '价格页读取失败')
     if provider == 'codex':
         p = codex_prices(ids)
         return p, ('OpenAI 官方价格页' if p else '价格页读取失败，按模型说明')

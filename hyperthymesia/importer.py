@@ -5,7 +5,7 @@
   hyperthymesia import --agent X --all [--days N]          导入该 agent 的全部会话（可限最近 N 天）
 
 各家会话记录都在本机：Claude Code ~/.claude/projects/、Codex ~/.codex/sessions/、WorkBuddy ~/.codebuddy/projects/、
-Qoder ~/.qoder/projects/*/transcript/。只取用户原话和助手每轮的最终回复（与平时写入同一口径）；
+Qoder ~/.qoder/projects/*/transcript/、DeepSeek Harness ~/.dsh/sessions/*/*/session.jsonl.zstd。只取用户原话和助手每轮的最终回复（与平时写入同一口径）；
 历史轮次的代码改动无法补回（影子仓库只在接入之后拍快照）。导入的轮次进入积压表，随后按项目分批写入，
 写入用该 agent 自己最便宜的模型。同一会话里接入之后由钩子记过的轮次不会重复导入。"""
 import glob, json, os, time
@@ -71,11 +71,19 @@ def _codex(path):
     return turns, cwd
 
 
+def _dsh(path):
+    from .hooks import dsh_read, dsh_turns
+    turns, cwd = dsh_turns(dsh_read(path))
+    if cwd and Path(cwd).name == 'writer_work': return [], cwd   # 本框架写入器自己的无头会话，不是用户对话
+    return turns, cwd
+
+
 SOURCES = {
     'claude': (lambda: glob.glob(str(HOME() / '.claude/projects/*/*.jsonl')), _claude_like),
     'codex': (lambda: glob.glob(str(HOME() / '.codex/sessions/**/rollout-*.jsonl'), recursive=True), _codex),
     'codebuddy': (lambda: glob.glob(str(HOME() / '.codebuddy/projects/*/*.jsonl')), _codebuddy),
     'qoder': (lambda: glob.glob(str(HOME() / '.qoder/projects/*/transcript/*.jsonl')), _claude_like),
+    'dsh': (lambda: glob.glob(str(HOME() / '.dsh/sessions/*/*/session.jsonl.zstd')), _dsh),
 }
 SOURCES['workbuddy'] = SOURCES['codebuddy']
 
@@ -85,7 +93,7 @@ def sessions(agent):
     files, parse = SOURCES[agent]
     out = []
     for f in files():
-        sid = Path(f).stem
+        sid = Path(f).parent.name if agent == 'dsh' else Path(f).stem   # dsh：每个会话一个目录，目录名即会话编号
         if agent == 'codex': sid = sid.split('-', 6)[-1] if sid.count('-') >= 6 else sid   # rollout-日期时间-会话编号
         out.append({'id': sid, 'path': f, 'mtime': os.path.getmtime(f)})
     return sorted(out, key=lambda s: -s['mtime'])
@@ -121,7 +129,7 @@ def import_sessions(agent, picked, write=True):
 def run(argv):
     agent = argv[argv.index('--agent') + 1] if '--agent' in argv else None
     if '--list' in argv:
-        for a in ([agent] if agent else ['claude', 'codex', 'codebuddy', 'qoder']):
+        for a in ([agent] if agent else ['claude', 'codex', 'codebuddy', 'qoder', 'dsh']):
             ss = sessions(a)
             print('== %s（%d 个会话）' % (a, len(ss)))
             for s in ss[:30]:
