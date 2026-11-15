@@ -82,3 +82,14 @@ class ExplicitRetryTest(unittest.TestCase):
                 writecmd.write_project('')
             close_all()
         self.assertEqual(calls, [['记住：每周四发布', '你好'], ['记住：每周四发布']])
+
+
+class CodexSubagentTest(unittest.TestCase):
+    def test_subagent_rollout_detected(self):
+        with tempfile.TemporaryDirectory() as d:
+            child, parent = Path(d) / 'c.jsonl', Path(d) / 'p.jsonl'
+            child.write_text(json.dumps({'type': 'session_meta', 'payload': {'id': 'b', 'parent_thread_id': 'a', 'thread_source': 'subagent'}}) + '\n', encoding='utf-8')
+            parent.write_text(json.dumps({'type': 'session_meta', 'payload': {'id': 'a', 'thread_source': 'user'}}) + '\n', encoding='utf-8')
+            self.assertTrue(hooks.is_subagent({'transcript_path': str(child)}, 'codex'))
+            self.assertFalse(hooks.is_subagent({'transcript_path': str(parent)}, 'codex'))
+            self.assertFalse(hooks.is_subagent({'transcript_path': str(child)}, 'claude'))

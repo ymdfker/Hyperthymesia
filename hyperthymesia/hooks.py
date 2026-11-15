@@ -182,7 +182,8 @@ def on_prompt(d, agent):
     ctx = reader.context(open_stores(cwd), st, sid)
     if os.environ.get('HYPERTHYMESIA_TRACE'):   # 兼容测试用：记录每轮注入了多少（不记内容）
         with open(os.environ['HYPERTHYMESIA_TRACE'], 'a', encoding='utf-8') as f:
-            f.write(json.dumps({'session': sid, 'turn': n, 'agent': agent, 'chars': len(ctx or ''), 'full': '长期记忆全文' in (ctx or '')}) + '\n')
+            f.write(json.dumps({'session': sid, 'turn': n, 'agent': agent, 'chars': len(ctx or ''), 'full': '长期记忆全文' in (ctx or ''),
+                                'keys': sorted(d), 'tp': d.get('transcript_path')}) + '\n')
     return ADAPTERS[agent][1]('prompt-submit', ctx)
 
 
@@ -262,6 +263,16 @@ def _log(kind, msg):
     except OSError: pass
 
 
+def is_subagent(d, agent):
+    """Codex 的子 agent 与父会话共用 session_id，钩子输入里也没有区分字段；只有它自己的会话记录首行
+    session_meta 带 parent_thread_id（thread_source=subagent）。子 agent 的任务不是用户原话，跳过（兼容实测 S8）。"""
+    if agent != 'codex' or not d.get('transcript_path'): return False
+    try:
+        with open(d['transcript_path'], encoding='utf-8', errors='replace') as f: m = (json.loads(f.readline()).get('payload') or {})
+    except (OSError, ValueError): return False
+    return bool(m.get('parent_thread_id')) or m.get('thread_source') == 'subagent'
+
+
 def run(argv):
     """hyperthymesia hook <事件> [--agent claude|codex]"""
     event = argv[0] if argv else ''
@@ -269,7 +280,8 @@ def run(argv):
     out = {}
     try:
         d = json.loads(sys.stdin.read() or '{}')
-        out = EVENTS[event](d, agent) or {}
+        if not (event in ('prompt-submit', 'stop') and is_subagent(d, agent)):
+            out = EVENTS[event](d, agent) or {}
     except Exception as exc:   # 钩子绝不能打断宿主
         _log('hook_error', '%s %s: %s' % (agent, event, exc))
     sys.stdout.write(json.dumps(out, ensure_ascii=False)); sys.stdout.flush()
