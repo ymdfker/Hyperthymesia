@@ -63,3 +63,22 @@ class DshTest(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class ExplicitRetryTest(unittest.TestCase):
+    """便宜模型偶发漏写：用户明确要求记住的轮次，这一批没写出新记忆时，逐轮单独重写一次。"""
+    def test_retry_explicit_turn_once(self):
+        from hyperthymesia import writecmd
+        from hyperthymesia.store import state
+        with tempfile.TemporaryDirectory() as d, mock.patch.dict(os.environ, {'HYPERTHYMESIA_HOME': d}):
+            st = state(Path(d))
+            for i, u in enumerate(['记住：每周四发布', '你好'], 1):
+                st.execute("INSERT INTO backlog(session, turn, project, user_text, assistant_text, started_at, completed_at, diff, numstat, written) "
+                           "VALUES('s', ?, '', ?, '好', ?, ?, '', '', 0)", (i, u, 't%d' % i, 't%d' % i))
+            calls = []
+            def fake(home, stores, turns, st, project):
+                calls.append([t['user'] for t in turns]); return {'new_facts': 0 if len(calls) == 1 else 1, 'calls': 1, 'usage': {}, 'log': []}
+            with mock.patch.object(writecmd.writer, 'write_batch', side_effect=fake):
+                writecmd.write_project('')
+            close_all()
+        self.assertEqual(calls, [['记住：每周四发布', '你好'], ['记住：每周四发布']])

@@ -2,7 +2,7 @@
 
 同一项目同时只允许一个写入进程（锁文件，跨平台）；按开始时间顺序、每批约 BATCH_TOKENS 估算 token 分批写入；
 写成功的轮次标记为已写，失败的保留在积压里，下次再写。"""
-import json, os, time
+import json, os, re, time
 from pathlib import Path
 
 from . import changes, paths, writer
@@ -10,6 +10,7 @@ from .hooks import est_tokens
 from .store import Store, state
 
 BATCH_TOKENS = int(os.environ.get('HYPERTHYMESIA_BATCH_TOKENS', '16000'))
+EXPLICIT = re.compile(r'记住|记一下|记一条|记下|别忘|remember|keep in mind|note that', re.I)   # 用户明确要求记住
 LOCK_STALE = 1800   # 锁超过 30 分钟视为上次写入进程已异常退出
 
 
@@ -58,7 +59,7 @@ def _write_rows(project, st, rows):
     if not rows: return 0
     stores = {'u': Store(paths.personal_db(), 'u'), 'p': Store(paths.project_db(project)[0], 'p') if project else None}
     done = 0; batch = []; size = 0
-    def flush(batch):
+    def flush(batch, retrying=False):
         turns = [{'session': r['session'], 'turn': r['turn'], 'user': r['user_text'] or '', 'assistant': r['assistant_text'] or '',
                   'changes': changes.change_block(r['diff'] or '', r['numstat'] or ''), 'at': r['started_at']} for r in batch]
         t0 = time.time()
@@ -66,6 +67,9 @@ def _write_rows(project, st, rows):
             res = writer.write_batch(paths.home(), stores, turns, st, project)
         except Exception as exc:
             _log({'at': time.strftime('%Y-%m-%dT%H:%M:%S'), 'project': project, 'turns': len(batch), 'error': str(exc)[:300]}); return 0
+        # 程序兜底（便宜模型偶发漏写，兼容实测 28.14）：用户明确要求记住的轮次，这一批却没写出任何新记忆 → 逐轮单独重写一次
+        if not res['new_facts'] and not retrying:
+            for r in [r for r in batch if EXPLICIT.search(r['user_text'] or '')]: flush([r], True)
         st.executemany('UPDATE backlog SET written=1 WHERE session=? AND turn=?', [(r['session'], r['turn']) for r in batch])
         _log({'at': time.strftime('%Y-%m-%dT%H:%M:%S'), 'project': project, 'turns': len(batch), 'calls': res['calls'], 'usage': res['usage'],
               'new_facts': res['new_facts'], 'secs': round(time.time() - t0, 1), 'steps': [x.get('step') for x in res['log']]})

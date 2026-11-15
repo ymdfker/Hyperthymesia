@@ -45,6 +45,20 @@ def run(prompt, sid=None, resume=False):
     elif AGENT == 'qoder':
         from hyperthymesia.providers import qodercli_cmd
         cmd = qodercli_cmd() + ['-p', prompt, '-o', 'json', '--yolo'] + (['--resume', sid] if resume else [])
+    elif AGENT == 'codex':
+        base = ['codex', 'exec'] + (['resume', sid] if resume else []) + [prompt, '--json', '-m', 'gpt-5.6-luna',
+                '-c', 'model_reasoning_effort="low"'] + ([] if resume else ['-s', 'workspace-write'])
+        r = subprocess.run(base, cwd=PROJ, env=dict(env(), HTTPS_PROXY='http://127.0.0.1:7897', HTTP_PROXY='http://127.0.0.1:7897',
+                           ALL_PROXY='socks5://127.0.0.1:7897'), capture_output=True, text=True, timeout=900, stdin=subprocess.DEVNULL)
+        msg = ''
+        for l in r.stdout.splitlines():
+            try: e = json.loads(l)
+            except ValueError: continue
+            if e.get('type') == 'thread.started': sid = e.get('thread_id')
+            it = e.get('item') or {}
+            if e.get('type') == 'item.completed' and it.get('type') == 'agent_message': msg = it.get('text', '')
+        if not msg: print('  !! codex 无回复：', (r.stderr or r.stdout)[-300:])
+        return sid, msg.strip()
     elif AGENT == 'dsh':
         cmd = ['dsh', '--profile', 'hytest', prompt]                       # 无头模式：一次性，不支持续接
     t0 = time.time()
@@ -95,7 +109,7 @@ def mark(k, ok, note=''):
     R[k] = {'ok': bool(ok), 'note': note}; print(('  ✓ ' if ok else '  ✗ ') + k, note)
 
 
-def wait_written(current, timeout=300):
+def wait_written(current, timeout=600):
     """之前会话的积压都已写入（当前会话自己这一轮要等下次才写，不算）。"""
     t = time.time()
     while time.time() - t < timeout:
@@ -105,13 +119,20 @@ def wait_written(current, timeout=300):
 
 
 def main():
-    if OUT.exists(): shutil.rmtree(OUT)
-    PROJ.mkdir(parents=True); subprocess.run(['git', 'init', '-q', str(PROJ)], check=True)
-    WRAP.write_text('#!/bin/sh\nPYTHONPATH=%s exec %s -m hyperthymesia "$@"\n' % (REPO, sys.executable)); WRAP.chmod(0o755)
-    before = {p.name for p in PROJ.rglob('*') if '.git' not in p.parts}
+    # Codex 的新钩子必须由用户在 Codex 里 /hooks 批准：第一次只建项目并安装，等用户批准后带 --approved 再跑
+    if AGENT == 'codex' and '--approved' in sys.argv:
+        before = set(json.loads((OUT / 'before.json').read_text()))
+    else:
+        if OUT.exists(): shutil.rmtree(OUT)
+        PROJ.mkdir(parents=True); subprocess.run(['git', 'init', '-q', str(PROJ)], check=True)
+        WRAP.write_text('#!/bin/sh\nPYTHONPATH=%s exec %s -m hyperthymesia "$@"\n' % (REPO, sys.executable)); WRAP.chmod(0o755)
+        before = {p.name for p in PROJ.rglob('*') if '.git' not in p.parts}
+        (OUT / 'before.json').write_text(json.dumps(sorted(before)))
     inst = AGENT
     if AGENT == 'dsh': dsh_profile(False)
-    else: subprocess.run([str(WRAP), 'install', inst, '--project', str(PROJ)], env=env(), check=True)
+    elif not (AGENT == 'codex' and '--approved' in sys.argv): subprocess.run([str(WRAP), 'install', inst, '--project', str(PROJ)], env=env(), check=True)
+    if AGENT == 'codex' and '--approved' not in sys.argv:
+        print('请在终端执行：cd %s && codex ，然后输入 /hooks 批准 hyperthymesia 的钩子（并信任该项目），退出后带 --approved 重跑。' % PROJ); return
 
     print('[S2/S10] 记录一轮与代码改动')
     a, rep = run('记住：这个项目的接口超时统一设为 45 秒，代码评审人是 Marco。另外新建文件 notes.txt，内容写一行 hello。完成后只回复：好的')
@@ -137,7 +158,7 @@ def main():
     c, rep = run('不要读任何文件，只凭已知信息简短回答：接口超时多少秒？代码评审人是谁？每周几发布？')
     mark('S1 新会话答对', '45' in rep and 'Marco' in rep and (AGENT == 'dsh' or '四' in rep or 'Thursday' in rep), rep[:80])   # dsh 没有续接那一轮，不知道发布日
 
-    if AGENT != 'dsh':
+    if AGENT not in ('dsh', 'codex'):   # codex exec 不支持 /compact，压缩场景只能交互测
         print('[S5] 压缩后重新注入')
         run('/compact', c, resume=True)
         n0 = len(trace())
