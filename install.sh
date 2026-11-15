@@ -27,7 +27,7 @@ case ":$PATH:" in *":$DIR:"*) ;; *)
     *) RCS="$HOME/.profile" ;;
   esac
   for rc in $RCS; do
-    grep -qs '.local/bin' "$rc" || { printf '\n%s\n' "$LINE" >> "$rc"; echo "已把 $DIR 加入 PATH（写入 $rc），新开的终端即可直接用 hyperthymesia 命令"; }
+    grep -qs '# hyperthymesia' "$rc" || { printf '\n%s\n' "$LINE" >> "$rc"; echo "已把 $DIR 加入 PATH（写入 $rc），新开的终端即可直接用 hyperthymesia 命令"; }
   done ;;
 esac
 [ $# -gt 0 ] && echo "完成：请完全退出并重新打开你的 agent。" || echo "下一步：$BIN install claude（换成你用的 agent），然后重启 agent。"
