@@ -38,15 +38,20 @@ $env:HY_AGENTS="claude"; irm https://github.com/ymdfker/Hyperthymesia/releases/l
 
 ### 第 3 步：重启 agent
 
-完全退出再打开。之后正常使用即可，什么都不用管。
+完全退出再打开（DeepSeek Harness 用户：关掉正在运行的 `dsh web` 再重新执行）。之后正常使用即可，什么都不用管。
 
 ### 第 4 步（可选）：检查
 
+新开一个终端，把 `claude` 换成你的 agent：
+
 ```bash
-hyperthymesia doctor
+hyperthymesia doctor --agent claude
 ```
 
-看到“写入提供方”后面有 agent 名和模型名，就说明接入成功。（提示找不到命令时，用完整路径 `~/.local/bin/hyperthymesia`，Windows 为 `%USERPROFILE%\.hyperthymesia\bin\hyperthymesia.exe`。）
+“写入提供方”后面是这个 agent 的名字和模型名，就说明接入成功。正常聊几轮后，执行 `hyperthymesia context 项目目录`
+可以看到记下的记忆（记忆在后台整理，聊得够多或会话结束时才写入，不会马上出现）。
+
+提示找不到命令：用完整路径 `~/.local/bin/hyperthymesia`（Windows 为 `%USERPROFILE%\.hyperthymesia\bin\hyperthymesia.exe`）。
 
 ## 可选操作
 
@@ -72,6 +77,8 @@ base_url = "https://api.deepseek.com/v1"
 api_key_env = "DEEPSEEK_API_KEY"         # 只写环境变量名，key 本身放在环境变量里，本工具不保存
 ```
 
+**升级**：重新执行第 1 步的命令即可（会覆盖程序并重新接入，记忆保留）。
+
 **卸载**：`hyperthymesia uninstall claude`（还原原配置）。删除 `~/.hyperthymesia/` 即清空全部记忆。
 
 ## 常用命令
@@ -80,7 +87,7 @@ api_key_env = "DEEPSEEK_API_KEY"         # 只写环境变量名，key 本身放
 |---|---|
 | `install <agent> [--project 目录]` | 接入 agent（原配置先备份） |
 | `uninstall <agent> [--project 目录]` | 移除接入，还原原配置 |
-| `doctor` | 自检：用哪个模型整理、是否可用 |
+| `doctor [--agent X]` | 自检：该 agent 用哪个模型整理、是否可用 |
 | `context [目录]` | 查看该目录下会注入给 agent 的记忆 |
 | `write` | 立即整理积压对话（平时后台自动） |
 | `import --list` / `import --agent X --session 编号` | 导入接入前的会话 |

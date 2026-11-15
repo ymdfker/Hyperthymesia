@@ -46,6 +46,9 @@ def _doctor(argv):
     """自检：写入模型从哪里来、能不能用；不打印任何 key 的内容。"""
     import os, shutil
     from . import config, paths
+    if '--agent' in argv:   # 按某个 agent 检查：与钩子里一样把它当宿主，看整理记忆会用谁的模型
+        a = argv[argv.index('--agent') + 1]
+        os.environ['HYPERTHYMESIA_HOST_AGENT'] = 'codebuddy' if a == 'workbuddy' else a
     s = config.writer_settings()
     print('记忆目录：%s' % paths.home())
     print('写入提供方：%s（来源：%s）' % (s['provider'] or '无', s['source']))
@@ -59,13 +62,15 @@ def _doctor(argv):
         print('  key：%s' % ('已从环境变量 %s 读到（不显示内容）' % var if key else '环境变量 %s 未设置' % var))
     elif s['model']:
         print('  模型：%s（配置指定）' % s['model'])
-    elif s['provider'] in ('codex', 'claude', 'codebuddy', 'qoder'):
+    elif s['provider'] in ('codex', 'claude', 'codebuddy', 'qoder', 'dsh'):
         from . import models
         print('  模型：%s' % models.explain(s['provider']))
+    if '--agent' not in argv:
+        print('提示：在 agent 里使用时，整理记忆用的是该 agent 自己的模型；查看某个 agent 的情况：hyperthymesia doctor --agent 名字')
     return 0 if s['provider'] else 1
 
 
-COMMANDS['doctor'] = (_doctor, '自检：写入模型配置是否可用（不显示 key）')
+COMMANDS['doctor'] = (_doctor, '自检：写入模型配置是否可用（不显示 key）；--agent X 按某个 agent 检查')
 def _import(argv):
     from .importer import run
     return run(argv)
