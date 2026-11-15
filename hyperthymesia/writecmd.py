@@ -41,32 +41,41 @@ def _log(rec):
 
 
 def write_project(project):
-    """写入某个项目（空串表示没有项目，只有个人库）的全部积压；返回写入的轮次数，被锁时返回 None。"""
+    """写入某个项目（空串表示没有项目，只有个人库）的全部积压；返回写入的轮次数，被锁时返回 None。
+    写入期间新完成的轮次（其他会话结束时拉起的写入进程因锁而退出）在本进程写完一批后接着写，不留到下次；失败过的不在本次重试。"""
     with Lock(project) as lk:
         if not lk.ok: return None
-        st = state(paths.home())
-        rows = [dict(r) for r in st.execute('SELECT * FROM backlog WHERE project=? AND written=0 AND completed_at IS NOT NULL ORDER BY started_at, session, turn', (project,))]
-        if not rows: return 0
-        stores = {'u': Store(paths.personal_db(), 'u'), 'p': Store(paths.project_db(project)[0], 'p') if project else None}
-        done = 0; batch = []; size = 0
-        def flush(batch):
-            turns = [{'session': r['session'], 'turn': r['turn'], 'user': r['user_text'] or '', 'assistant': r['assistant_text'] or '',
-                      'changes': changes.change_block(r['diff'] or '', r['numstat'] or ''), 'at': r['started_at']} for r in batch]
-            t0 = time.time()
-            try:
-                res = writer.write_batch(paths.home(), stores, turns, st, project)
-            except Exception as exc:
-                _log({'at': time.strftime('%Y-%m-%dT%H:%M:%S'), 'project': project, 'turns': len(batch), 'error': str(exc)[:300]}); return 0
-            st.executemany('UPDATE backlog SET written=1 WHERE session=? AND turn=?', [(r['session'], r['turn']) for r in batch])
-            _log({'at': time.strftime('%Y-%m-%dT%H:%M:%S'), 'project': project, 'turns': len(batch), 'calls': res['calls'], 'usage': res['usage'],
-                  'new_facts': res['new_facts'], 'secs': round(time.time() - t0, 1), 'steps': [x.get('step') for x in res['log']]})
-            return len(batch)
-        for r in rows:
-            n = est_tokens((r['user_text'] or '') + (r['assistant_text'] or '')) + est_tokens(changes.change_block(r['diff'] or '', r['numstat'] or ''))
-            if batch and size + n > BATCH_TOKENS: done += flush(batch); batch = []; size = 0
-            batch.append(r); size += n
-        if batch: done += flush(batch)
-        return done
+        st = state(paths.home()); total = 0; tried = set()
+        while True:
+            rows = [dict(r) for r in st.execute('SELECT * FROM backlog WHERE project=? AND written=0 AND completed_at IS NOT NULL ORDER BY started_at, session, turn', (project,))]
+            rows = [r for r in rows if (r['session'], r['turn']) not in tried]
+            if not rows: return total
+            tried |= {(r['session'], r['turn']) for r in rows}
+            total += _write_rows(project, st, rows)
+
+
+def _write_rows(project, st, rows):
+    if not rows: return 0
+    stores = {'u': Store(paths.personal_db(), 'u'), 'p': Store(paths.project_db(project)[0], 'p') if project else None}
+    done = 0; batch = []; size = 0
+    def flush(batch):
+        turns = [{'session': r['session'], 'turn': r['turn'], 'user': r['user_text'] or '', 'assistant': r['assistant_text'] or '',
+                  'changes': changes.change_block(r['diff'] or '', r['numstat'] or ''), 'at': r['started_at']} for r in batch]
+        t0 = time.time()
+        try:
+            res = writer.write_batch(paths.home(), stores, turns, st, project)
+        except Exception as exc:
+            _log({'at': time.strftime('%Y-%m-%dT%H:%M:%S'), 'project': project, 'turns': len(batch), 'error': str(exc)[:300]}); return 0
+        st.executemany('UPDATE backlog SET written=1 WHERE session=? AND turn=?', [(r['session'], r['turn']) for r in batch])
+        _log({'at': time.strftime('%Y-%m-%dT%H:%M:%S'), 'project': project, 'turns': len(batch), 'calls': res['calls'], 'usage': res['usage'],
+              'new_facts': res['new_facts'], 'secs': round(time.time() - t0, 1), 'steps': [x.get('step') for x in res['log']]})
+        return len(batch)
+    for r in rows:
+        n = est_tokens((r['user_text'] or '') + (r['assistant_text'] or '')) + est_tokens(changes.change_block(r['diff'] or '', r['numstat'] or ''))
+        if batch and size + n > BATCH_TOKENS: done += flush(batch); batch = []; size = 0
+        batch.append(r); size += n
+    if batch: done += flush(batch)
+    return done
 
 
 def run(argv):

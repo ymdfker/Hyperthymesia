@@ -179,7 +179,11 @@ def on_prompt(d, agent):
     elif agent in ALWAYS_FULL:
         reader.reset_session(st, sid)   # 无法确认上文是否还留着之前注入的记忆：每轮注入全文
     from .mcp_server import open_stores
-    return ADAPTERS[agent][1]('prompt-submit', reader.context(open_stores(cwd), st, sid))
+    ctx = reader.context(open_stores(cwd), st, sid)
+    if os.environ.get('HYPERTHYMESIA_TRACE'):   # 兼容测试用：记录每轮注入了多少（不记内容）
+        with open(os.environ['HYPERTHYMESIA_TRACE'], 'a', encoding='utf-8') as f:
+            f.write(json.dumps({'session': sid, 'turn': n, 'agent': agent, 'chars': len(ctx or ''), 'full': '长期记忆全文' in (ctx or '')}) + '\n')
+    return ADAPTERS[agent][1]('prompt-submit', ctx)
 
 
 def on_stop(d, agent):
