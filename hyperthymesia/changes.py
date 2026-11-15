@@ -115,7 +115,23 @@ def _file_diff(home, cwd, a, b):
     return '\n'.join(out), '\n'.join(stat)
 
 
+MAX_TREE_FILES = int(os.environ.get('HYPERTHYMESIA_MAX_TREE_FILES', '3000'))
+
+
+def _too_big(cwd):
+    """不是 git 仓库的工作目录（如主目录、装着很多仓库的大文件夹）可能有海量文件：每轮快照会把钩子拖慢几分钟（dsh 网页实测）。
+    数到上限就停，超过则不记录代码改动（对话照常记录）。git 仓库本身有 .gitignore 约束，不限制。"""
+    if (Path(cwd) / '.git').exists(): return False
+    n = 0
+    for _, dirs, files in os.walk(cwd):
+        dirs[:] = [d for d in dirs if d not in ('.git', 'node_modules', '.venv', '__pycache__')]
+        n += len(files)
+        if n > MAX_TREE_FILES: return True
+    return False
+
+
 def snapshot(home, cwd):
+    if _too_big(cwd): return ''
     return _git_snapshot(home, cwd) if has_git() else _file_snapshot(home, cwd)
 
 
