@@ -72,8 +72,10 @@ def _codex(path):
 
 
 def _dsh(path):
-    from .hooks import dsh_read, dsh_turns
-    turns, cwd = dsh_turns(dsh_read(path))
+    from .hooks import dsh_read, dsh_turns, dsh_header_is_sub
+    text = dsh_read(path)
+    if dsh_header_is_sub(text): return [], None                 # 子 agent 的会话：任务不是用户原话
+    turns, cwd = dsh_turns(text)
     if cwd and Path(cwd).name == 'writer_work': return [], cwd   # 本框架写入器自己的无头会话，不是用户对话
     return turns, cwd
 

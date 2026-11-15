@@ -93,3 +93,7 @@ class CodexSubagentTest(unittest.TestCase):
             self.assertTrue(hooks.is_subagent({'transcript_path': str(child)}, 'codex'))
             self.assertFalse(hooks.is_subagent({'transcript_path': str(parent)}, 'codex'))
             self.assertFalse(hooks.is_subagent({'transcript_path': str(child)}, 'claude'))
+
+    def test_dsh_subagent_header(self):
+        self.assertTrue(hooks.dsh_header_is_sub('{"type":"session","parentSession":"session-a","origin":"subagent","delegationDepth":1}\n{}'))
+        self.assertFalse(hooks.dsh_header_is_sub('{"type":"session","delegationDepth":0}\n{}'))

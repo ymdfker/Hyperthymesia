@@ -174,7 +174,7 @@ def main():
     texts = [r['user_text'] for r in db('SELECT user_text FROM backlog')]
     mark('S7 并发', any('5433' in t for t in texts) and any('600' in t for t in texts), '积压 %d 轮' % len(texts))
 
-    if AGENT in ('claude', 'codebuddy', 'qoder'):
+    if AGENT in ('claude', 'codebuddy', 'qoder', 'dsh'):
         print('[S8] 子 agent')
         n0 = len(db('SELECT 1 FROM backlog'))
         s8, rep = run('请务必使用子 agent（Task 工具）去读取 notes.txt 的内容，然后把内容告诉我。')

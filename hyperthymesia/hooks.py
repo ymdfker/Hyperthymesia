@@ -263,14 +263,28 @@ def _log(kind, msg):
     except OSError: pass
 
 
+def dsh_header_is_sub(text):
+    """dsh 会话记录首行 session 头：子 agent 会话带 parentSession / origin=subagent / delegationDepth>0。"""
+    try: h = json.loads(text.split('\n', 1)[0] or '{}')
+    except ValueError: return False
+    return bool(h.get('parentSession')) or h.get('origin') == 'subagent' or (h.get('delegationDepth') or 0) > 0
+
+
 def is_subagent(d, agent):
-    """Codex 的子 agent 与父会话共用 session_id，钩子输入里也没有区分字段；只有它自己的会话记录首行
-    session_meta 带 parent_thread_id（thread_source=subagent）。子 agent 的任务不是用户原话，跳过（兼容实测 S8）。"""
-    if agent != 'codex' or not d.get('transcript_path'): return False
-    try:
-        with open(d['transcript_path'], encoding='utf-8', errors='replace') as f: m = (json.loads(f.readline()).get('payload') or {})
-    except (OSError, ValueError): return False
-    return bool(m.get('parent_thread_id')) or m.get('thread_source') == 'subagent'
+    """子 agent 的任务不是用户原话，钩子跳过（兼容实测 S8）。
+    Codex：子 agent 与父会话共用 session_id，钩子输入也没有区分字段；只有它自己的会话记录首行 session_meta 带 parent_thread_id。
+    dsh：子 agent 有自己的会话，其会话记录首行带 parentSession / delegationDepth>0。"""
+    tp = d.get('transcript_path')
+    if not tp or not Path(tp).exists(): return False
+    if agent == 'codex':
+        try:
+            with open(tp, encoding='utf-8', errors='replace') as f: m = (json.loads(f.readline()).get('payload') or {})
+        except (OSError, ValueError): return False
+        return bool(m.get('parent_thread_id')) or m.get('thread_source') == 'subagent'
+    if agent == 'dsh':
+        try: return dsh_header_is_sub(dsh_read(tp))
+        except (OSError, subprocess.SubprocessError): return False
+    return False
 
 
 def run(argv):
