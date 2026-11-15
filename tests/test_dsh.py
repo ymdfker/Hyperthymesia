@@ -42,15 +42,15 @@ class DshTest(unittest.TestCase):
         prof = self.root / '.dsh/profiles/web'; (prof / 'node_modules').mkdir(parents=True)
         (prof / 'package.json').write_text('{}'); (self.root / '.dsh/profiles/headless').mkdir()
         for k in install.DSH_PKGS: (prof / 'node_modules' / k).mkdir(parents=True)
-        orig = '# 用户注释\n[]\n'; (prof / 'cordis.patch.yml').write_text(orig)
+        orig = '# 用户注释\n[]\n'; (prof / 'cordis.patch.yml').write_text(orig, encoding='utf-8')
         install.dsh()
-        t = (prof / 'cordis.patch.yml').read_text()
+        t = (prof / 'cordis.patch.yml').read_text(encoding='utf-8')
         self.assertNotIn('\n[]', t); self.assertIn('isolate:', t); self.assertIn('dsh-mcp-client', t)
         self.assertFalse((self.root / '.dsh/profiles/headless/cordis.patch.yml').exists())   # 写入器用的 headless 不装钩子
         install.dsh()                                                                         # 重复安装不重复追加
-        self.assertEqual((prof / 'cordis.patch.yml').read_text().count('id: hyperthymesia\n'), 1)
+        self.assertEqual((prof / 'cordis.patch.yml').read_text(encoding='utf-8').count('id: hyperthymesia\n'), 1)
         install.dsh(remove=True)
-        self.assertEqual((prof / 'cordis.patch.yml').read_text().strip(), orig.strip())
+        self.assertEqual((prof / 'cordis.patch.yml').read_text(encoding='utf-8').strip(), orig.strip())
 
 
 if __name__ == '__main__':
