@@ -32,6 +32,14 @@ class DshTest(unittest.TestCase):
         turns, cwd = hooks.dsh_turns('\n'.join(json.dumps(r, ensure_ascii=False) for r in rows))
         self.assertEqual(cwd, '/w'); self.assertEqual([(t[1], t[2]) for t in turns], [('超时设为45秒', '好的')])
 
+    def test_marker_check_ignores_text_before_compaction(self):
+        before = '{"type":"user/message","data":"长期记忆…"}\n'
+        self.assertIn('长期记忆', hooks.after_compaction(before))
+        for comp in ('{"type":"compaction/end","seq":9}', '{"type":"compacted","payload":{"replacement_history":[]}}'):
+            self.assertNotIn('长期记忆', hooks.after_compaction(before + comp + '\n{"type":"user/message"}'))
+        kept = '{"type":"compacted","payload":{"replacement_history":["长期记忆…"]}}'   # Codex 压缩保留了注入内容：仍算在上文
+        self.assertIn('长期记忆', hooks.after_compaction(before + kept))
+
     def test_official_price_page(self):
         with mock.patch.object(models, '_fetch', return_value=PRICING_MD):
             p = models.deepseek_prices()

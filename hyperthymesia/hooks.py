@@ -149,6 +149,17 @@ def est_tokens(text):
 def _st(): return state(paths.home())
 
 
+# 没有“压缩前”钩子的宿主（Codex、dsh）：压缩后旧的注入文字仍留在会话记录里，但已不在模型上文中。
+# 只看最后一次压缩之后的部分（Codex 的 compacted 行自带保留下来的历史，所以从该行算起）。
+COMPACT_MARKS = ('"type":"compacted"', '"type": "compacted"', '"type":"compaction/end"', '"type": "compaction/end"')
+
+
+def after_compaction(text):
+    cut = max(text.rfind(m) for m in COMPACT_MARKS)
+    if cut < 0: return text
+    return text[text.rfind('\n', 0, cut) + 1:]
+
+
 def on_prompt(d, agent):
     sid = d.get('session_id') or 'unknown'; cwd = d.get('cwd') or os.getcwd(); st = _st()
     pdb, root = paths.project_db(cwd)
@@ -163,7 +174,7 @@ def on_prompt(d, agent):
     if tp and Path(tp).exists():
         try:
             text = dsh_read(tp) if agent == 'dsh' else Path(tp).read_text(encoding='utf-8', errors='replace')
-            if '长期记忆' not in text: reader.reset_session(st, sid)
+            if '长期记忆' not in after_compaction(text): reader.reset_session(st, sid)
         except (OSError, subprocess.SubprocessError): pass
     elif agent in ALWAYS_FULL:
         reader.reset_session(st, sid)   # 无法确认上文是否还留着之前注入的记忆：每轮注入全文
@@ -200,8 +211,12 @@ def on_pre_compact(d, agent):
 def on_session_start(d, agent):
     st = _st()
     if d.get('source') in ('compact', 'clear'): reader.reset_session(st, d.get('session_id'))
-    projects = [r[0] for r in st.execute('SELECT DISTINCT project FROM backlog WHERE written=0 AND completed_at IS NOT NULL')]
-    for p in projects: spawn_writer(p, agent)
+    # 补写上次没整理的积压（Codex、dsh 没有会话结束钩子，靠这里兜底）；用那段对话所属 agent 的模型，不用当前 agent 的
+    rows = st.execute('SELECT b.project, a.agent FROM backlog b LEFT JOIN backlog_agent a ON a.session=b.session '
+                      'WHERE b.written=0 AND b.completed_at IS NOT NULL ORDER BY b.completed_at').fetchall()
+    host = {}
+    for p, a in rows: host[p] = a or agent                    # 同一项目取最近一轮所属的 agent
+    for p, a in host.items(): spawn_writer(p, a)
     return {}
 
 
