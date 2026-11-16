@@ -12,7 +12,7 @@ import json, os, shutil, subprocess, sys, time
 from pathlib import Path
 
 from . import changes, paths, reader
-from .store import state
+from .store import state, tx
 from .execution import internal_env, is_internal
 
 ALWAYS_FULL = {'trae'}   # 钩子不给会话记录路径的宿主：无法检查注入是否还在上文
@@ -23,7 +23,7 @@ THRESHOLD = int(os.environ.get('HYPERTHYMESIA_BACKLOG_TOKENS', '16000'))   # 积
 def _claude_final(transcript):
     """Claude Code 会话记录（JSONL）：最后一条真实用户消息之后，助手所有文字块拼起来。"""
     rows = []
-    for l in Path(transcript).read_text(encoding='utf-8', errors='replace').splitlines():
+    for l in Path(transcript).read_text(encoding='utf-8-sig', errors='replace').splitlines():
         try: rows.append(json.loads(l))
         except ValueError: pass
     start = 0
@@ -42,7 +42,7 @@ def _claude_final(transcript):
 def _codex_final(transcript):
     """Codex 会话记录：最后一个 task_complete 事件里的 last_agent_message；没有时取最后一条助手消息。"""
     last = ''; msg = ''
-    for l in Path(transcript).read_text(encoding='utf-8', errors='replace').splitlines():
+    for l in Path(transcript).read_text(encoding='utf-8-sig', errors='replace').splitlines():
         try: e = json.loads(l)
         except ValueError: continue
         p = e.get('payload') or {}
@@ -55,7 +55,7 @@ def _codex_final(transcript):
 def _codebuddy_final(transcript):
     """CodeBuddy（WorkBuddy 内置）会话记录：type=message、role=assistant 的 output_text；Stop 输入里通常已带 last_assistant_message。"""
     last = ''
-    for l in Path(transcript).read_text(encoding='utf-8', errors='replace').splitlines():
+    for l in Path(transcript).read_text(encoding='utf-8-sig', errors='replace').splitlines():
         try: e = json.loads(l)
         except ValueError: continue
         if e.get('type') == 'message' and e.get('role') == 'assistant':
@@ -161,20 +161,33 @@ def after_compaction(text):
     return text[text.rfind('\n', 0, cut) + 1:]
 
 
+def _snapshot(home, root):
+    try: return changes.snapshot(home, root)
+    except (OSError, subprocess.SubprocessError) as exc:
+        _log('snapshot_failed', str(exc)[:200]); return ''
+
+
 def on_prompt(d, agent):
     sid = d.get('session_id') or 'unknown'; cwd = d.get('cwd') or os.getcwd(); st = _st()
     pdb, root = paths.project_db(cwd)
-    n = (st.execute('SELECT MAX(turn) FROM backlog WHERE session=?', (sid,)).fetchone()[0] or 0) + 1
-    tree = changes.snapshot(paths.home(), root) if root else ''
-    st.execute('INSERT OR REPLACE INTO backlog_agent VALUES(?,?)', (sid, agent))   # 写入时用这个宿主自己的便宜模型
-    st.execute('INSERT OR REPLACE INTO backlog(session, turn, project, user_text, started_at, diff, numstat, written) VALUES(?,?,?,?,?,?,?,0)',
-               (sid, n, str(root or ''), d.get('prompt') or '', time.strftime('%Y-%m-%dT%H:%M:%S'), 'tree:' + tree, ''))
+    tree = _snapshot(paths.home(), root) if root else ''
+    host_turn_id = str(d['turn_id']) if d.get('turn_id') is not None else None
+    # Allocation and insert share a write transaction. Never replace an earlier user turn.
+    with tx(st):
+        old = st.execute('SELECT turn FROM backlog_capture WHERE session=? AND host_turn_id=?', (sid, host_turn_id)).fetchone() if host_turn_id else None
+        if old: n = old['turn']
+        else:
+            n = (st.execute('SELECT MAX(turn) FROM backlog WHERE session=?', (sid,)).fetchone()[0] or 0) + 1
+            st.execute('INSERT INTO backlog(session, turn, project, user_text, started_at, diff, numstat, written) VALUES(?,?,?,?,?,?,?,0)',
+                       (sid, n, str(root or ''), d.get('prompt') or '', time.strftime('%Y-%m-%dT%H:%M:%S'), 'tree:' + tree, ''))
+            st.execute('INSERT INTO backlog_capture VALUES(?,?,?,?,?)', (sid, n, d.get('transcript_path'), agent, host_turn_id))
+        st.execute('INSERT OR REPLACE INTO backlog_agent VALUES(?,?)', (sid, agent))
     # 有的宿主（如 CodeBuddy）不把钩子注入的内容存进会话记录，续接会话后之前注入的记忆就不在上文了：
     # 会话记录里找不到我们注入过的标记时，按“上文没有记忆”处理，重新注入全文
     tp = d.get('transcript_path')
     if tp and Path(tp).exists():
         try:
-            text = dsh_read(tp) if agent == 'dsh' else Path(tp).read_text(encoding='utf-8', errors='replace')
+            text = dsh_read(tp) if agent == 'dsh' else Path(tp).read_text(encoding='utf-8-sig', errors='replace')
             if '长期记忆' not in after_compaction(text): reader.reset_session(st, sid)
         except (OSError, subprocess.SubprocessError): pass
     elif agent in ALWAYS_FULL:
@@ -190,11 +203,17 @@ def on_prompt(d, agent):
 
 def on_stop(d, agent):
     sid = d.get('session_id') or 'unknown'; st = _st()
-    r = st.execute('SELECT * FROM backlog WHERE session=? ORDER BY turn DESC LIMIT 1', (sid,)).fetchone()
+    if d.get('turn_id') is not None:
+        r = st.execute('SELECT b.* FROM backlog b JOIN backlog_capture c ON c.session=b.session AND c.turn=b.turn WHERE b.session=? AND c.host_turn_id=?', (sid, str(d['turn_id']))).fetchone()
+    else:
+        r = st.execute('SELECT * FROM backlog WHERE session=? ORDER BY turn DESC LIMIT 1', (sid,)).fetchone()
     if not r or r['completed_at']: return {}          # 同一轮的重复 Stop，或没有登记开始
     diff = numstat = ''
     if r['project'] and (r['diff'] or '').startswith('tree:') and r['diff'][5:]:
-        end = changes.snapshot(paths.home(), r['project']); diff, numstat = changes.diff(paths.home(), r['project'], r['diff'][5:], end)
+        end = _snapshot(paths.home(), r['project'])
+        if end:
+            try: diff, numstat = changes.diff(paths.home(), r['project'], r['diff'][5:], end)
+            except (OSError, subprocess.SubprocessError) as exc: _log('snapshot_diff_failed', str(exc)[:200])
     final = d.get('last_assistant_message') or ''   # 宿主直接给了最终回复（CodeBuddy 等）就不必解析会话记录
     tp = d.get('transcript_path')
     if not final and tp and Path(tp).exists():
@@ -218,6 +237,8 @@ def on_session_start(d, agent):
     _log('lifecycle', json.dumps({'event': 'session-start', 'agent': agent, 'session': d.get('session_id')}, ensure_ascii=False))
     st = _st()
     if d.get('source') in ('compact', 'clear'): reader.reset_session(st, d.get('session_id'))
+    from .capture import recover_pending
+    recover_pending(st, d, agent, _log)
     # 补写上次没整理的积压（Codex、dsh 没有会话结束钩子，靠这里兜底）；用那段对话所属 agent 的模型，不用当前 agent 的
     rows = st.execute('SELECT b.project, a.agent FROM backlog b LEFT JOIN backlog_agent a ON a.session=b.session '
                       'WHERE b.written=0 AND b.completed_at IS NOT NULL ORDER BY b.completed_at').fetchall()
@@ -305,7 +326,7 @@ def run(argv):
     agent = argv[argv.index('--agent') + 1] if '--agent' in argv else 'claude'
     out = {}
     try:
-        d = json.loads(sys.stdin.read() or '{}')
+        d = json.loads(sys.stdin.read().lstrip('\ufeff').strip() or '{}')
         if not (event in ('prompt-submit', 'stop') and is_subagent(d, agent)):
             out = EVENTS[event](d, agent) or {}
     except Exception as exc:   # 钩子绝不能打断宿主

@@ -5,7 +5,7 @@
   .claude/settings.local.json 和 .mcp.json）。
 - codex：~/.codex/config.toml 末尾追加一段带标记的配置（--project 时为该项目的 .codex/config.toml）。
   Codex 的新钩子必须由用户在 Codex 里执行 /hooks 审核信任后才会运行，安装后会提示。"""
-import json, os, shutil, sys
+import json, os, shutil, sys, subprocess
 from pathlib import Path
 
 from .hooks import self_cmd
@@ -32,7 +32,7 @@ def _backup(p):
 
 
 def _load(p):
-    try: return json.loads(p.read_text(encoding='utf-8')) if p.exists() else {}
+    try: return json.loads(p.read_text(encoding='utf-8-sig')) if p.exists() else {}
     except ValueError: raise SystemExit('无法解析 %s，请先手动修复它' % p)
 
 
@@ -68,7 +68,7 @@ def claude(project=None, remove=False):
 def codex(project=None, remove=False):
     home = Path(os.environ.get('HOME') or Path.home())
     cp = (Path(project) / '.codex' / 'config.toml') if project else home / '.codex' / 'config.toml'
-    text = cp.read_text(encoding='utf-8') if cp.exists() else ''
+    text = cp.read_text(encoding='utf-8-sig') if cp.exists() else ''
     if MARK_BEGIN in text:
         a = text.index(MARK_BEGIN); b = text.index(MARK_END, a) + len(MARK_END)
         text = (text[:a].rstrip('\n') + '\n' + text[b:].lstrip('\n')).strip('\n') + ('\n' if text.strip() else '')
@@ -85,11 +85,8 @@ def codex(project=None, remove=False):
 
 
 def codebuddy_exe():
-    """CodeBuddy 命令行：PATH 上的 codebuddy，或 WorkBuddy 安装包里自带的那一份。"""
-    for c in [shutil.which('codebuddy'), '/Applications/WorkBuddy.app/Contents/Resources/app.asar.unpacked/cli/bin/codebuddy',
-              os.path.expandvars(r'%LOCALAPPDATA%\Programs\WorkBuddy\resources\app.asar.unpacked\cli\bin\codebuddy.cmd')]:
-        if c and Path(c).exists(): return c
-    return None
+    from .launch import find_codebuddy
+    return find_codebuddy()
 
 
 def codebuddy(project=None, remove=False):
@@ -113,15 +110,17 @@ def codebuddy(project=None, remove=False):
         import subprocess
         exe = codebuddy_exe()
         if not exe: raise SystemExit('找不到 codebuddy 命令行（WorkBuddy 安装包里自带一份）')
-        subprocess.run([exe, 'mcp', 'remove', '--scope', 'user', NAME], capture_output=True)
-        if not remove: subprocess.run([exe, 'mcp', 'add', '--scope', 'user', NAME, '--'] + self_cmd() + ['serve'], capture_output=True, check=True)
+        from . import launch, providers
+        cmd = launch.command(exe, '@tencent-ai/codebuddy-code', 'codebuddy')
+        providers._run_cli(cmd + ['mcp', 'remove', '--scope', 'user', NAME], capture_output=True, agent='codebuddy')
+        if not remove: providers._run_cli(cmd + ['mcp', 'add', '--scope', 'user', NAME, '--'] + self_cmd() + ['serve'], capture_output=True, check=True, agent='codebuddy')
         files.append('codebuddy 用户级 MCP（经 codebuddy mcp add 登记）')
     return files
 
 
 def workbuddy_config_dir():
     """桌面版允许用环境变量指定独立配置目录。"""
-    return Path(os.environ.get('WORKBUDDY_CONFIG_DIR') or Path.home() / '.workbuddy').expanduser()
+    return Path(os.environ.get('WORKBUDDY_CONFIG_DIR') or os.environ.get('CODEBUDDY_CONFIG_DIR') or Path.home() / '.workbuddy').expanduser()
 
 
 def workbuddy(project=None, remove=False):
@@ -152,23 +151,34 @@ def workbuddy(project=None, remove=False):
 
 
 def qoder(project=None, remove=False):
-    """Qoder（桌面 agent 与 qodercli 共用）：钩子写 ~/.qoder/settings.json（--project 时为项目的 .qoder/settings.local.json）；
-    MCP 写 ~/.qoder/mcp.json（--project 时为项目的 .mcp.json）。"""
+    """User MCP and hooks share settings.json; migrate only our obsolete mcp.json entry."""
     home = Path(os.environ.get('HOME') or Path.home())
-    sp = (Path(project) / '.qoder' / 'settings.local.json') if project else home / '.qoder' / 'settings.json'
-    mp = (Path(project) / '.mcp.json') if project else home / '.qoder' / 'mcp.json'
-    s = _load(sp); hooks = s.setdefault('hooks', {})
+    sp = Path(project) / '.qoder' / 'settings.local.json' if project else home / '.qoder' / 'settings.json'
+    legacy = Path(project) / '.mcp.json' if project else home / '.qoder' / 'mcp.json'
+    s = _load(sp); old = _load(legacy)  # validate both before changing either
+    _backup(sp)
+    if legacy.exists(): _backup(legacy)
+    hooks = s.setdefault('hooks', {})
     for ev, name in CLAUDE_EVENTS.items():
         groups = [g for g in hooks.get(ev, []) if not _is_ours(g)]
         if not remove: groups.append({'hooks': [{'type': 'command', 'command': _cmd('hook', name, '--agent', 'qoder'), 'timeout': 60}]})
         if groups: hooks[ev] = groups
         else: hooks.pop(ev, None)
     if not hooks: s.pop('hooks', None)
+    target = old if project else s
+    servers = target.setdefault('mcpServers', {}); servers.pop(NAME, None)
+    if not remove:
+        c = self_cmd(); servers[NAME] = {'command': c[0], 'args': c[1:] + ['serve']}
+    if not servers: target.pop('mcpServers', None)
+    if not project:
+        old_servers = old.get('mcpServers', {})
+        if NAME in old_servers:
+            old_servers.pop(NAME)
+            if not old_servers: old.pop('mcpServers', None)
+            _save(legacy, old)
     _save(sp, s)
-    m = _load(mp); servers = m.setdefault('mcpServers', {}); servers.pop(NAME, None)
-    if not remove: c = self_cmd(); servers[NAME] = {'command': c[0], 'args': c[1:] + ['serve']}
-    _save(mp, m)
-    return [sp, mp]
+    if project: _save(legacy, old)
+    return [sp, legacy] if project or legacy.exists() else [sp]
 
 
 def _run_quiet(cmd, **kw):
@@ -190,7 +200,9 @@ def qoder_writer_check():
             return ('未能安装 qodercli（需要 npm）：记忆可以读取，但写入无法使用 Qoder 额度。可手动执行 npm install -g @qoder-ai/qodercli，'
                     '然后 qodercli login；或在 ~/.hyperthymesia/config.toml 里配置自己的 API key。')
     from .providers import qodercli_cmd
-    r = _run_quiet((qodercli_cmd() or [exe]) + ['status', '--output', 'json'])
+    from . import providers
+    try: r = providers._run_cli((qodercli_cmd() or [exe]) + ['status', '--output', 'json'], agent='qoder', capture_output=True, text=True, timeout=30)
+    except (OSError, ValueError, subprocess.SubprocessError): r = None
     try: st = json.loads(r.stdout or '{}') if r else {}
     except ValueError: st = {}
     if not st.get('logged_in'):
@@ -269,7 +281,7 @@ def dsh(project=None, remove=False):
     c = self_cmd(); out = [hp]
     for prof in profiles:
         pp = prof / 'cordis.patch.yml'
-        text = pp.read_text(encoding='utf-8') if pp.exists() else ''
+        text = pp.read_text(encoding='utf-8-sig') if pp.exists() else ''
         a, b = text.find(MARK_BEGIN), text.find(MARK_END)
         if a >= 0 and b > a: text = text[:a].rstrip('\n') + '\n' + text[b + len(MARK_END):].lstrip('\n')
         body = [l for l in text.splitlines() if l.strip() and not l.lstrip().startswith('#')]

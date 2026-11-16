@@ -57,6 +57,17 @@ def parse(text):
     raise ValueError('本地修复次数过多')
 
 
+def validate_submission(value):
+    fields = {'objects', 'memories', 'replacements', 'record_moves', 'advice_updates', 'need_objects', 'withdraw'}
+    if not isinstance(value, dict) or set(value) - fields:
+        raise providers.ProviderError('写入结果不符合接口：需要memories等规定字段；不是成功的空写，原材料保留。')
+    for field, entries in value.items():
+        if entries is not None and not isinstance(entries, list): raise providers.ProviderError('写入字段%s应为数组，原材料保留。' % field)
+        if field not in ('need_objects', 'withdraw') and any(not isinstance(x, dict) for x in entries or []):
+            raise providers.ProviderError('写入字段%s包含非对象条目，原材料保留。' % field)
+    return value
+
+
 def _lev(a, b):
     if abs(len(a) - len(b)) > 2: return 3
     prev = list(range(len(b) + 1))
@@ -184,6 +195,7 @@ class Batch:
             except ValueError as exc:
                 self.log.append({'step': 'parse_error', 'error': str(exc)[:200]})
                 prompt = '你上一条回复的JSON无法解析（%s）。请完整重交上一条回复的全部内容，只修正格式，只回复一个JSON对象。' % exc; continue
+            validate_submission(got)
             out = merge_delta(base, got) if base is not None else got; base = None
             need = [i for i in out.pop('need_objects', []) or [] if self._obj(i) and self._obj(i) not in shown]
             if need:
@@ -198,6 +210,7 @@ class Batch:
                 if extra:
                     base = out; prompt = '你写入的事实涉及对象' + ','.join(unseen) + '，但未看过它们的现有记录：\n' + self.render(extra) + '\n若本批内容更正了其中某条，应改为replacements。' + DELTA_ASK; continue
             break
+        if out is None: raise providers.ProviderError('写入未获得可解析结果，未确认完成，原材料保留。')
         self._remember(sid, self.usage[-1].get('input_tokens', 0) if self.usage else 0)
         if out: self.apply(out, quote_retry=True)
         self.gap_fill(); self.conflict_check(); self.save_sources()
@@ -316,7 +329,7 @@ class Batch:
         prompt = (GAP_NOTE + '\n<object_index>\n' + self.index_text() + '\n</object_index>\n<old_records>\n' + self.render(list(self.seen.items())) +
                   '\n</old_records>\n<conversation_material>\n' + self.material(set(gaps)) + '\n</conversation_material>\n只回复JSON。')
         try:
-            got = parse(self.ask(prompt).text); before = len(self.new_facts); self.apply(got, quote_retry=False)
+            got = validate_submission(parse(self.ask(prompt).text)); before = len(self.new_facts); self.apply(got, quote_retry=False)
             self.log.append({'step': 'gap_fill', 'added': len(self.new_facts) - before})
         except (ValueError, providers.ProviderError) as exc: self.log.append({'step': 'gap_fill_failed', 'error': str(exc)[:120]})
 

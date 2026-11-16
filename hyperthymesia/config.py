@@ -51,7 +51,7 @@ def _parse_toml(text):
 
 def load():
     p = paths.home() / 'config.toml'
-    try: return _parse_toml(p.read_text(encoding='utf-8')) if p.exists() else {}
+    try: return _parse_toml(p.read_text(encoding='utf-8-sig')) if p.exists() else {}
     except Exception as exc: raise SystemExit('无法解析 %s：%s' % (p, exc))
 
 

@@ -132,7 +132,10 @@ def _too_big(cwd):
 
 def snapshot(home, cwd):
     if _too_big(cwd): return ''
-    return _git_snapshot(home, cwd) if has_git() else _file_snapshot(home, cwd)
+    from .writecmd import Lock
+    with Lock('snapshot:' + _key(cwd), home=home, blocking=True) as lock:
+        if not lock.ok: raise OSError('代码快照正在被其他进程使用')
+        return _git_snapshot(home, cwd) if has_git() else _file_snapshot(home, cwd)
 
 
 def diff(home, cwd, a, b):

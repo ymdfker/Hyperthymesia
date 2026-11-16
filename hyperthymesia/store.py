@@ -31,6 +31,8 @@ STATE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS backlog(session TEXT NOT NULL, turn INTEGER NOT NULL, project TEXT, user_text TEXT, assistant_text TEXT,
   started_at TEXT, completed_at TEXT, diff TEXT DEFAULT '', numstat TEXT DEFAULT '', written INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY(session, turn));
+CREATE TABLE IF NOT EXISTS backlog_capture(session TEXT NOT NULL, turn INTEGER NOT NULL, transcript TEXT,
+  agent TEXT, host_turn_id TEXT, PRIMARY KEY(session, turn));
 CREATE TABLE IF NOT EXISTS backlog_agent(session TEXT PRIMARY KEY, agent TEXT);
 CREATE TABLE IF NOT EXISTS writer_sessions(store TEXT PRIMARY KEY, provider TEXT, sid TEXT, last_input INTEGER);
 CREATE TABLE IF NOT EXISTS delivered(session TEXT NOT NULL, store TEXT NOT NULL, fact INTEGER NOT NULL, digest TEXT,

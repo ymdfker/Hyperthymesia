@@ -23,6 +23,10 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - uses: actions/setup-node@v4
+        if: runner.os == 'Windows'
+        with:
+          node-version: '24'
       - name: 单元测试
         run: python -m unittest discover -s tests -v
       - name: 安装打包工具（只在构建时需要，产物不依赖它）

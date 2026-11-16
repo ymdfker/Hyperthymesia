@@ -58,8 +58,20 @@ def _doctor(argv):
     print('记忆目录：%s' % paths.home())
     print('写入提供方：%s（来源：%s）' % (s['provider'] or '无', s['source']))
     if s['provider'] in config.CLI_EXE:
-        exe = shutil.which(config.CLI_EXE[s['provider']])
-        print('  命令行：%s' % (exe or '未找到（请安装或在配置里换提供方）'))
+        from . import providers
+        try:
+            cmd = providers.codebuddy_cmd() if s['provider'] == 'codebuddy' else providers.qodercli_cmd() if s['provider'] == 'qoder' else [shutil.which(config.CLI_EXE[s['provider']])]
+            print('  命令行入口：%s' % (' '.join(cmd) if cmd and all(cmd) else '未找到'))
+            if '--check-cli' in argv and cmd and all(cmd):
+                rep = providers._run_cli(cmd + ['--version'], agent=s['provider'], capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=20)
+                if rep.returncode: print('  启动失败：%s' % providers._failure_hint(rep.stderr or rep.stdout))
+                else: print('  启动检查：通过（--version，不调用模型）')
+        except Exception as exc: print('  命令行不可用：%s' % providers._failure_hint(exc))
+        print('  鉴权及真实写入：尚未验证；桌面已登录不代表CLI可调用，不会自动花额度试探。')
+    from .store import state
+    st = state(paths.home())
+    pending = st.execute('SELECT SUM(completed_at IS NULL), SUM(completed_at IS NOT NULL) FROM backlog WHERE written=0').fetchone()
+    print('待处理：已完成%d轮，未完成%d轮（不会把未完成轮次冒充完成）' % (pending[1] or 0, pending[0] or 0))
     if s['provider'] == 'openai':
         key, var = config.api_key(s)
         print('  接口地址：%s' % (s['base_url'] or 'https://api.openai.com/v1'))
@@ -75,7 +87,7 @@ def _doctor(argv):
     return 0 if s['provider'] else 1
 
 
-COMMANDS['doctor'] = (_doctor, '自检：写入模型配置是否可用（不显示 key）；--agent X 按某个 agent 检查')
+COMMANDS['doctor'] = (_doctor, '自检配置及积压（不显示key）；--agent X，--check-cli无模型检查启动')
 def _import(argv):
     from .importer import run
     return run(argv)

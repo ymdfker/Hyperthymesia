@@ -214,6 +214,15 @@ hyperthymesia doctor --agent dsh
 
 “写入提供方”应显示 `dsh`。这只确认整理提供方；还需要确认 MCP 已连接、钩子实际触发。完整检查步骤见[兼容核查清单](docs/desktop-compat.md)。
 
+### Windows桌面接入修复（源码，尚未随v0.2.5发行）
+
+- Qoder用户级MCP与钩子均使用`~/.qoder/settings.json`；升级接入会先备份，只迁移本服务在旧`mcp.json`中的条目。
+- Windows通过Node直接启动实际CLI脚本，避免`.cmd`截断多行规则；后台Qoder调用移除SDK启动模式标记，保留认证位置和其他环境。不会强制把所有新版Qoder降级。
+- WorkBuddy支持发现注册安装位置和lite构建。非标准位置仍无法发现时，可在启动宿主前设置`HYPERTHYMESIA_CODEBUDDY_CLI`为实际`cli/bin/codebuddy`或JavaScript入口；它不是登录凭据。
+- `hyperthymesia doctor --agent workbuddy --check-cli`可无模型检查启动；`doctor --agent qoder --check-cli`同理。启动通过不代表模型鉴权通过；若lite构建没有独立登录入口且桌面认证不能复用，需要明确配置自己的兼容API，不会自动切换账号或收费渠道。
+- 数据目录可用`HYPERTHYMESIA_HOME`指定，例如PowerShell中`$env:HYPERTHYMESIA_HOME="F:\Hyperthymesia-data"`。它不改变exe解包目录；系统盘满时还需将标准`TEMP`和`TMP`设为可写、有空间的目录，再重启宿主。搬迁旧库前请退出宿主并备份。
+- 失败保留原材料，`write`会返回失败状态；查看数据目录内的`logs/writer.log`与`logs/hooks.log`。新锁由操作系统释放。缺失Stop的轮次只在原会话记录明确完成且唯一匹配时恢复，否则继续保留，`doctor`会显示未完成数量。
+
 ### 遇到问题
 
 - **提示找不到 hyperthymesia 命令**：关掉终端重新打开再试；还不行就用完整路径：Mac/Linux 为 `~/.local/bin/hyperthymesia`，
@@ -416,6 +425,14 @@ Put the actual key in the named environment variable, not in this file.
 **Upgrade:** rerun the installation command for your agent. This replaces the executable and refreshes integration while retaining memories. It installs the latest published release, not unreleased source changes.
 
 **Uninstall:** run `hyperthymesia uninstall claude`, substituting your agent's identifier. It removes Hyperthymesia's integration entries and preserves other settings. Memories remain on disk; deleting `~/.hyperthymesia/` permanently removes them.
+
+### Windows desktop fixes in source (not yet in v0.2.5)
+
+Qoder's user MCP configuration now shares `~/.qoder/settings.json` with hooks. Integration backs up files and migrates only Hyperthymesia's obsolete MCP entry. Windows CLI launches use the actual Node/JavaScript entrypoint, preserving multiline arguments; inherited Qoder SDK transport markers are removed without deleting authentication locations. Newer CLI versions are not automatically downgraded.
+
+For a nonstandard WorkBuddy location, use `HYPERTHYMESIA_CODEBUDDY_CLI` to specify the actual bundled script before starting the host. `doctor --agent workbuddy --check-cli` (or `qoder`) checks startup without a model request, not account/quota availability. A lite bundle with no usable login path may still require your explicitly configured API; no automatic credential or paid-provider fallback is performed.
+
+Use `HYPERTHYMESIA_HOME` for the memory directory. Executable extraction still uses `TEMP`/`TMP`; disk-full bootloader failures happen before Python code can run. Failed writes retain their input, OS locks release on process death, and interrupted turns are recovered only from unique, explicitly completed transcript records. Ambiguous turns remain pending and visible in `doctor`.
 
 ### Troubleshooting
 

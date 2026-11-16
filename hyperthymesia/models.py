@@ -39,15 +39,15 @@ def _save(d): _cache_path().write_text(json.dumps(d, ensure_ascii=False, indent=
 # ---------------------------------------------------------------- 可用模型
 def list_models(provider):
     from .install import codebuddy_exe
-    from .providers import qodercli_cmd
+    from .providers import qodercli_cmd, codebuddy_cmd, _run_cli
     try:
         if provider == 'codebuddy' and codebuddy_exe():
             # CodeBuddy 没有列模型的子命令（“codebuddy models”会被当成一句提问交给 agent）；--help 里 --model 的说明列出了可用模型
-            out = subprocess.run([codebuddy_exe(), '--help'], capture_output=True, text=True, encoding='utf-8', timeout=120).stdout
+            out = _run_cli(codebuddy_cmd() + ['--help'], agent='codebuddy', capture_output=True, text=True, encoding='utf-8', timeout=120).stdout
             m = re.search(r'Currently supported:\s*\(([^)]*)\)', out)
             return [i.strip() for i in m.group(1).split(',') if i.strip()] if m else []
         if provider == 'qoder' and qodercli_cmd():
-            out = subprocess.run(qodercli_cmd() + ['--list-models'], capture_output=True, text=True, encoding='utf-8', timeout=120,
+            out = _run_cli(qodercli_cmd() + ['--list-models'], agent='qoder', capture_output=True, text=True, encoding='utf-8', timeout=120,
                                  stdin=subprocess.DEVNULL).stdout
             return [l.strip() for l in out.splitlines()[1:] if l.strip()]
         if provider == 'codex':

@@ -11,29 +11,64 @@ from .store import Store, state
 
 BATCH_TOKENS = int(os.environ.get('HYPERTHYMESIA_BATCH_TOKENS', '16000'))
 EXPLICIT = re.compile(r'记住|记一下|记一条|记下|别忘|remember|keep in mind|note that', re.I)   # 用户明确要求记住
-LOCK_STALE = 1800   # 锁超过 30 分钟视为上次写入进程已异常退出
+def _pid_alive(pid):
+    if os.name == 'nt':
+        import ctypes
+        from ctypes import wintypes
+        kernel = ctypes.WinDLL('kernel32', use_last_error=True)
+        kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        kernel.OpenProcess.restype = wintypes.HANDLE
+        kernel.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+        kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+        handle = kernel.OpenProcess(0x1000, False, pid)
+        if not handle: return ctypes.get_last_error() != 87  # access denied is not proof of death
+        try:
+            code = wintypes.DWORD()
+            if not kernel.GetExitCodeProcess(handle, ctypes.byref(code)): return True
+            return code.value == 259
+        finally: kernel.CloseHandle(handle)
+    try: os.kill(pid, 0); return True
+    except ProcessLookupError: return False
+    except PermissionError: return True
 
 
 class Lock:
-    def __init__(self, project):
+    """Native OS lock: process death releases ownership, regardless of lock-file age.
+    Keep the inode/path in place so waiting writers cannot acquire different files.
+    """
+    def __init__(self, project, home=None, blocking=False):
         import hashlib
-        d = paths.home() / 'locks'; d.mkdir(exist_ok=True)
-        self.p = d / (hashlib.sha1(project.encode()).hexdigest()[:16] + '.lock'); self.ok = False
+        d = Path(home if home is not None else paths.home()) / 'locks'; d.mkdir(parents=True, exist_ok=True)
+        self.p = d / (hashlib.sha1(project.encode()).hexdigest()[:16] + '.lock')
+        self.ok = False; self.handle = None; self.blocking = blocking
     def __enter__(self):
-        for _ in range(2):
-            try:
-                fd = os.open(str(self.p), os.O_CREAT | os.O_EXCL | os.O_WRONLY); os.write(fd, str(os.getpid()).encode()); os.close(fd)
-                self.ok = True; return self
-            except FileExistsError:
-                try:
-                    if time.time() - self.p.stat().st_mtime > LOCK_STALE: self.p.unlink(); continue
-                except OSError: pass
-                return self
+        import errno
+        fd = os.open(str(self.p), os.O_RDWR | os.O_CREAT, 0o600)
+        self.handle = os.fdopen(fd, 'r+b')
+        try:
+            legacy = self.handle.read().decode('ascii', errors='ignore').strip()
+            if legacy.isdigit() and int(legacy) > 0 and _pid_alive(int(legacy)):
+                self.handle.close(); self.handle = None; return self
+            if not self.p.stat().st_size: self.handle.write(b' '); self.handle.flush()
+            self.handle.seek(0)
+            if os.name == 'nt':
+                import msvcrt
+                msvcrt.locking(fd, msvcrt.LK_LOCK if self.blocking else msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(fd, fcntl.LOCK_EX | (0 if self.blocking else fcntl.LOCK_NB))
+        except OSError as exc:
+            self.handle.close(); self.handle = None
+            if exc.errno in (errno.EACCES, errno.EAGAIN, errno.EDEADLK): return self
+            raise
+        self.ok = True
+        self.handle.seek(0); self.handle.truncate()
+        self.handle.write(json.dumps({'pid': os.getpid(), 'acquired_at': time.time()}).encode())
+        self.handle.flush()
         return self
-    def __exit__(self, *a):
-        if self.ok:
-            try: self.p.unlink()
-            except OSError: pass
+    def __exit__(self, *args):
+        if self.handle: self.handle.close(); self.handle = None
+        self.ok = False
 
 
 def _log(rec):
@@ -46,17 +81,20 @@ def write_project(project):
     写入期间新完成的轮次（其他会话结束时拉起的写入进程因锁而退出）在本进程写完一批后接着写，不留到下次；失败过的不在本次重试。"""
     with Lock(project) as lk:
         if not lk.ok: return None
-        st = state(paths.home()); total = 0; tried = set()
+        st = state(paths.home()); total = 0; tried = set(); failures = []
         while True:
             rows = [dict(r) for r in st.execute('SELECT * FROM backlog WHERE project=? AND written=0 AND completed_at IS NOT NULL ORDER BY started_at, session, turn', (project,))]
             rows = [r for r in rows if (r['session'], r['turn']) not in tried]
-            if not rows: return total
+            if not rows:
+                if failures: raise RuntimeError('部分写入失败，原材料仍在积压；请查看logs/writer.log。' + failures[-1])
+                return total
             tried |= {(r['session'], r['turn']) for r in rows}
-            total += _write_rows(project, st, rows)
+            total += _write_rows(project, st, rows, failures)
 
 
-def _write_rows(project, st, rows):
+def _write_rows(project, st, rows, failures=None):
     if not rows: return 0
+    if failures is None: failures = []
     stores = {'u': Store(paths.personal_db(), 'u'), 'p': Store(paths.project_db(project)[0], 'p') if project else None}
     done = 0; batch = []; size = 0
     def flush(batch, retrying=False):
@@ -66,10 +104,15 @@ def _write_rows(project, st, rows):
         try:
             res = writer.write_batch(paths.home(), stores, turns, st, project)
         except Exception as exc:
-            _log({'at': time.strftime('%Y-%m-%dT%H:%M:%S'), 'project': project, 'turns': len(batch), 'error': str(exc)[:300]}); return 0
+            message = str(exc)[:300]
+            _log({'at': time.strftime('%Y-%m-%dT%H:%M:%S'), 'project': project, 'turns': len(batch), 'status': 'failed', 'error': message})
+            if failures is not None: failures.append(message)
+            return 0
         # 程序兜底（便宜模型偶发漏写，兼容实测 28.14）：用户明确要求记住的轮次，这一批却没写出任何新记忆 → 逐轮单独重写一次
         if not res['new_facts'] and not retrying:
+            errors_before = len(failures)
             for r in [r for r in batch if EXPLICIT.search(r['user_text'] or '')]: flush([r], True)
+            if len(failures) != errors_before: return 0
         st.executemany('UPDATE backlog SET written=1 WHERE session=? AND turn=?', [(r['session'], r['turn']) for r in batch])
         _log({'at': time.strftime('%Y-%m-%dT%H:%M:%S'), 'project': project, 'turns': len(batch), 'calls': res['calls'], 'usage': res['usage'],
               'new_facts': res['new_facts'], 'secs': round(time.time() - t0, 1), 'steps': [x.get('step') for x in res['log']]})
@@ -94,7 +137,10 @@ def run(argv):
         r = state(paths.home()).execute("SELECT a.agent FROM backlog b JOIN backlog_agent a ON a.session=b.session WHERE b.written=0 ORDER BY b.started_at DESC LIMIT 1").fetchone()
         agent = r[0] if r else ''
     if agent: os.environ['HYPERTHYMESIA_HOST_AGENT'] = agent
+    failed = False
     for p in projects:
-        n = write_project(p)
+        try: n = write_project(p)
+        except Exception as exc:
+            print('%s：写入失败，材料保留。%s' % (p or '（个人）', exc)); failed = True; continue
         print('%s：%s' % (p or '（个人）', '已有写入进程在运行，跳过' if n is None else '写入 %d 轮' % n))
-    return 0
+    return 1 if failed else 0

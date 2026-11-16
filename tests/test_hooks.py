@@ -132,7 +132,7 @@ class InstallTest(unittest.TestCase):
         (self.home / '.qoder' / 'mcp.json').write_text(json.dumps({'mcpServers': {}}), encoding='utf-8')
         install.qoder()
         self.assertIn('--agent qoder', json.dumps(json.loads(sp.read_text(encoding='utf-8'))))
-        self.assertIn('hyperthymesia', json.loads((self.home / '.qoder' / 'mcp.json').read_text(encoding='utf-8'))['mcpServers'])
+        self.assertIn('hyperthymesia', json.loads(sp.read_text(encoding='utf-8'))['mcpServers'])
         install.qoder(remove=True)
         self.assertEqual(json.loads(sp.read_text(encoding='utf-8')), mine)
 

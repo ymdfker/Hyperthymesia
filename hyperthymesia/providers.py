@@ -43,9 +43,10 @@ def model():
     return m or DEFAULT_MODEL.get(name(), '')
 
 
-def _run_cli(cmd, **kwargs):
+def _run_cli(cmd, agent=None, **kwargs):
     """整理、补漏、冲突检查和模型试探统一走内部调用边界。"""
-    kwargs['env'] = internal_env(kwargs.get('env'))
+    from . import launch
+    kwargs['env'] = internal_env(launch.environment(agent, cmd, kwargs.get('env')))
     return subprocess.run(cmd, **kwargs)
 
 
@@ -102,23 +103,60 @@ def _claude(home, system, prompt, sid, log):
                   'cached_input_tokens': cr, 'output_tokens': u.get('output_tokens', 0), 'cost': o.get('total_cost_usd')})
 
 
-def _codebuddy(home, system, prompt, sid, log):
+def codebuddy_cmd():
     from .install import codebuddy_exe
-    exe = codebuddy_exe()
-    if not exe: raise ProviderError('找不到 codebuddy 命令行（WorkBuddy 安装包里自带一份）')
-    cmd = [exe, '-p', '--output-format', 'json', '--tools', '', '--strict-mcp-config', '--system-prompt', system] + \
-          (['--model', model()] if model() else []) + (['--resume', sid] if sid else [])
-    r = _run_cli(cmd, input=prompt, capture_output=True, text=True, encoding='utf-8', errors='replace', cwd=_workdir(home), timeout=1800)
-    try: o = json.loads(r.stdout)
-    except ValueError: raise ProviderError('codebuddy 输出无法解析：' + (r.stderr or r.stdout)[-400:])
-    credit = None
-    if isinstance(o, list):   # 输出为事件数组：取最后的结果，消耗累加各条消息里的 credit
-        credit = sum(((x.get('providerData') or {}).get('rawUsage') or {}).get('credit') or 0 for x in o if isinstance(x, dict))
-        o = next((x for x in reversed(o) if x.get('type') == 'result'), {})
-    if r.returncode or o.get('is_error'): raise ProviderError('codebuddy 调用失败：' + str(o.get('result'))[:400])
-    u = o.get('usage', {}); cr = u.get('cache_read_input_tokens', 0)
-    return Reply(o.get('session_id') or sid, o.get('result', ''),
-                 {'input_tokens': u.get('input_tokens', 0), 'cached_input_tokens': cr, 'output_tokens': u.get('output_tokens', 0), 'cost': credit})
+    from . import launch
+    try: return launch.command(codebuddy_exe(), '@tencent-ai/codebuddy-code', 'codebuddy')
+    except ValueError as exc: raise ProviderError(str(exc))
+
+
+def _failure_hint(text):
+    value = str(text).lower()
+    if any(x in value for x in ('authentication required', 'not logged in', 'unauthorized', 'please use /login')):
+        return '宿主CLI鉴权失败；桌面已登录不代表CLI可用。若当前lite构建没有登录入口，请明确配置自己的OpenAI兼容API；程序不会自动换用其他账号或API。'
+    if 'sdk_worker_removed' in value or 'sdk_invalid_args' in value:
+        return 'Qoder SDK启动模式与CLI调用不兼容；请检查CLI入口及SDK环境变量，不要直接认定所有新版CLI都需要降级。'
+    if 'cannot find module' in value or 'module_not_found' in value:
+        return 'CLI启动入口或构建类型不匹配；请检查实际JavaScript入口、Node.js和WorkBuddy lite构建。'
+    if 'failed to extract' in value or "no module named '_socket'" in value:
+        return '程序解包失败；请检查TEMP/TMP目录可写性和剩余空间。'
+    from .redact import redact
+    return redact(str(text))[0][:300]
+
+
+def _result_object(result, label):
+    text = (result.stdout or '').lstrip('\ufeff').strip()
+    if result.returncode: raise ProviderError(label + '调用失败：' + _failure_hint((result.stderr or '') + '\n' + text))
+    if text.lower().startswith(('authentication required', 'unauthorized', 'please use /login')):
+        raise ProviderError(_failure_hint(text))
+    try: obj = json.loads(text)
+    except ValueError:
+        lines = [line for line in text.splitlines() if line.lstrip().startswith('{')]
+        try: obj = json.loads(lines[-1])
+        except (ValueError, IndexError): raise ProviderError(label + '输出不是结果JSON：' + _failure_hint(result.stderr or text))
+    credits = None
+    if isinstance(obj, list):
+        credits = sum(((x.get('providerData') or {}).get('rawUsage') or {}).get('credit') or 0 for x in obj if isinstance(x, dict))
+        obj = next((x for x in reversed(obj) if isinstance(x, dict) and x.get('type') in ('result', 'error')), None)
+    if not isinstance(obj, dict) or 'result' not in obj or obj.get('is_error') or obj.get('type') == 'error' or str(obj.get('subtype', '')).startswith('error'):
+        raise ProviderError(label + '未返回成功结果：' + _failure_hint(obj.get('errors') or obj.get('result') or obj.get('error') or '' if isinstance(obj, dict) else ''))
+    value = obj['result']
+    if not isinstance(value, str): raise ProviderError(label + '结果正文类型错误')
+    if value.lower().startswith(('authentication required', 'unauthorized', 'please use /login')): raise ProviderError(_failure_hint(value))
+    return obj, credits
+
+
+def _codebuddy(home, system, prompt, sid, log):
+    cmd0 = codebuddy_cmd()
+    if not cmd0: raise ProviderError('找不到WorkBuddy/CodeBuddy CLI；非默认路径可设置HYPERTHYMESIA_CODEBUDDY_CLI为实际入口文件。')
+    chosen = model()
+    cmd = cmd0 + ['-p', '--output-format', 'json', '--tools', '', '--strict-mcp-config', '--system-prompt', system] + \
+          (['--model', chosen] if chosen else []) + (['--resume', sid] if sid else [])
+    result = _run_cli(cmd, agent='codebuddy', input=prompt, capture_output=True, text=True, encoding='utf-8', errors='replace', cwd=_workdir(home), timeout=1800)
+    obj, credit = _result_object(result, 'codebuddy')
+    usage = obj.get('usage') or {}
+    return Reply(obj.get('session_id') or sid, obj['result'],
+                 {'input_tokens': usage.get('input_tokens', 0), 'cached_input_tokens': usage.get('cache_read_input_tokens', 0), 'output_tokens': usage.get('output_tokens', 0), 'cost': credit})
 
 
 def _openai(home, system, prompt, sid, log):
@@ -152,30 +190,23 @@ def _one_shot_cli(home, cmd, prompt):
 
 
 def qodercli_cmd():
-    """qodercli 是 Node 脚本：用它旁边的 node 运行，不依赖系统默认 Node 版本（旧版本会直接报语法错误，已实测）。"""
-    exe = shutil.which('qodercli')
-    if not exe: return None
-    node = Path(exe).resolve().parent / ('node.exe' if os.name == 'nt' else 'node')
-    sib = Path(exe).parent / ('node.exe' if os.name == 'nt' else 'node')
-    for n in (sib, node):
-        if n.exists(): return [str(n), exe]
-    return [exe]
+    from . import launch
+    try: return launch.command(shutil.which('qodercli'), '@qoder-ai/qodercli', 'qodercli')
+    except ValueError as exc: raise ProviderError(str(exc))
 
 
 def _qoder(home, system, prompt, sid, log):
     cmd0 = qodercli_cmd()
-    if not cmd0: raise ProviderError('找不到 qodercli（npm install -g @qoder-ai/qodercli，然后 qodercli login）')
+    if not cmd0: raise ProviderError('找不到qodercli；请安装官方命令行并执行qodercli login。')
+    chosen = model()
     cmd = cmd0 + ['-p', '-o', 'json', '--tools', '', '--strict-mcp-config', '--system-prompt', system] + \
-          (['--model', model()] if model() else []) + (['--resume', sid] if sid else [])
-    r = _run_cli(cmd, input=prompt, capture_output=True, text=True, encoding='utf-8', errors='replace', cwd=_workdir(home), timeout=1800)
-    lines = [l for l in (r.stdout or '').splitlines() if l.strip().startswith('{')]
-    try: o = json.loads(lines[-1])
-    except (ValueError, IndexError): raise ProviderError('qodercli 输出无法解析：' + (r.stderr or r.stdout)[-400:])
-    if o.get('is_error'): raise ProviderError('qodercli 调用失败：' + str(o.get('errors') or o.get('result'))[:400])
-    u = o.get('usage', {}); cr = u.get('cache_read_input_tokens', 0)
-    return Reply(o.get('session_id') or sid, o.get('result', ''),
-                 {'input_tokens': u.get('input_tokens', 0) + cr + u.get('cache_creation_input_tokens', 0), 'cached_input_tokens': cr,
-                  'output_tokens': u.get('output_tokens', 0), 'cost': o.get('total_credits')})
+          (['--model', chosen] if chosen else []) + (['--resume', sid] if sid else [])
+    result = _run_cli(cmd, agent='qoder', input=prompt, capture_output=True, text=True, encoding='utf-8', errors='replace', cwd=_workdir(home), timeout=1800)
+    obj, _ = _result_object(result, 'qodercli')
+    usage = obj.get('usage') or {}; cached = usage.get('cache_read_input_tokens', 0)
+    return Reply(obj.get('session_id') or sid, obj['result'],
+                 {'input_tokens': usage.get('input_tokens', 0) + cached + usage.get('cache_creation_input_tokens', 0), 'cached_input_tokens': cached,
+                  'output_tokens': usage.get('output_tokens', 0), 'cost': obj.get('total_credits')})
 
 
 def _dsh(home, system, prompt, sid, log):
