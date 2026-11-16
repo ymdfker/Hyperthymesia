@@ -27,11 +27,11 @@ def completed_turns(path, agent):
                     reply = _text(message.get('content')); terminal = message.get('stop_reason') == 'end_turn'
                 if typ == 'result' and event.get('subtype') == 'success' and not event.get('is_error'):
                     reply = event.get('result'); terminal = True
-            if user is not None:
+            if user is not None and user.strip():
                 current = {'user': user, 'reply': '', 'complete': False}; completed.append(current)
             if reply and current is not None:
                 current['reply'] = reply
-                if terminal: current['complete'] = True
+                current['complete'] = terminal
     return completed
 
 

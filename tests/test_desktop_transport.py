@@ -98,6 +98,15 @@ class DesktopTransportTest(unittest.TestCase):
         self.assertIsNone(state(paths.home()).execute('SELECT completed_at FROM backlog').fetchone()[0])
         record('completed');spawn=self.hook('session-start',{'session_id':'s','transcript_path':str(transcript)})
         self.assertEqual(state(paths.home()).execute('SELECT assistant_text FROM backlog').fetchone()[0],'已确认45秒');spawn.assert_called_once()
+    def test_recovery_does_not_reuse_an_earlier_completion_flag(self):
+        from hyperthymesia.capture import completed_turns
+        transcript=self.root/'completion.jsonl'
+        events=[{'type':'message','role':'user','content':'question'},
+                {'type':'message','role':'assistant','status':'completed','content':'earlier answer'},
+                {'type':'message','role':'assistant','status':'running','content':'new unfinished continuation'}]
+        transcript.write_text('\n'.join(json.dumps(e) for e in events))
+        self.assertFalse(completed_turns(transcript,'codebuddy')[0]['complete'])
+
     def test_internal_hooks_skip_without_creating_store(self):
         with mock.patch.dict(os.environ,{'HYPERTHYMESIA_INTERNAL_CALL':'1'}):self.hook('prompt-submit',{'session_id':'internal','prompt':'must not record'})
         self.assertFalse((self.root/'memory/state.db').exists())
