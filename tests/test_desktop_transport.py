@@ -59,6 +59,14 @@ class DesktopTransportTest(unittest.TestCase):
         project=state(paths.home()).execute('SELECT project FROM backlog').fetchone()[0]
         with self.assertRaisesRegex(RuntimeError,'原材料|材料|积压'):writecmd.write_project(project)
         self.assertEqual(state(paths.home()).execute('SELECT written FROM backlog').fetchone()[0],0)
+    def test_gap_protocol_failure_keeps_material_pending(self):
+        self.hook('prompt-submit',{'session_id':'s','prompt':'接口超时45秒'})
+        self.hook('stop',{'session_id':'s','last_assistant_message':'好的'})
+        providers.FAKE_REPLIES.extend(['{}','{"objects":[],"records":[]}'])
+        project=state(paths.home()).execute('SELECT project FROM backlog').fetchone()[0]
+        with self.assertRaises(RuntimeError):writecmd.write_project(project)
+        self.assertEqual(state(paths.home()).execute('SELECT written FROM backlog').fetchone()[0],0)
+
     def test_native_lock_released_after_process_kill(self):
         code='from hyperthymesia.writecmd import Lock\nimport sys\nwith Lock("dead-child") as lock:\n print("ready" if lock.ok else "blocked",flush=True)\n sys.stdin.read()\n'
         child=subprocess.Popen([sys.executable,'-c',code],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)

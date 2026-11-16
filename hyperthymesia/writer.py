@@ -212,6 +212,7 @@ class Batch:
             break
         if out is None: raise providers.ProviderError('写入未获得可解析结果，未确认完成，原材料保留。')
         self._remember(sid, self.usage[-1].get('input_tokens', 0) if self.usage else 0)
+        self.save_sources()  # preserve provenance even if a later provider operation fails
         if out: self.apply(out, quote_retry=True)
         self.gap_fill(); self.conflict_check(); self.save_sources()
         tot = {k: sum(u.get(k, 0) for u in self.usage) for k in ('input_tokens', 'cached_input_tokens', 'output_tokens')}
@@ -309,7 +310,8 @@ class Batch:
                     for m, q in zip(pending, qs): m['evidence'] = [q] if isinstance(q, str) else q
                     self.log.append({'step': 'ask_quotes', 'entries': len(pending)})
                     return self.apply({'memories': pending}, quote_retry=False)
-                except (ValueError, providers.ProviderError) as exc: self.log.append({'step': 'ask_quotes_failed', 'error': str(exc)[:120]})
+                except (ValueError, providers.ProviderError) as exc:
+                    self.log.append({'step': 'ask_quotes_failed', 'error': str(exc)[:120]}); raise
             # 补交一次仍对不上原文：只丢这几条，其余照常保存（设计 23.49）
             self.log.append({'step': 'dropped_unsourced', 'titles': [m.get('title') for m in pending]})
 
@@ -331,7 +333,8 @@ class Batch:
         try:
             got = validate_submission(parse(self.ask(prompt).text)); before = len(self.new_facts); self.apply(got, quote_retry=False)
             self.log.append({'step': 'gap_fill', 'added': len(self.new_facts) - before})
-        except (ValueError, providers.ProviderError) as exc: self.log.append({'step': 'gap_fill_failed', 'error': str(exc)[:120]})
+        except (ValueError, providers.ProviderError) as exc:
+            self.log.append({'step': 'gap_fill_failed', 'error': str(exc)[:120]}); raise
 
     # ------------------------------------------------------------ 冲突检查
     def conflict_candidates(self):
@@ -375,9 +378,9 @@ class Batch:
                   '若是，用replacements引用该组两条ref，写一条合并后的最新正文（kind照常标注，evidence可省略）；若确实是两件不同的事，不要列出。只回复{"replacements":[…]}，没有就回复{"replacements":[]}。\n'
                   + '\n'.join(lines))
         try:
-            reps = parse(self.ask(prompt).text).get('replacements', []) or []
+            reps = validate_submission(parse(self.ask(prompt).text)).get('replacements', []) or []
         except (ValueError, providers.ProviderError) as exc:
-            self.log.append({'step': 'conflict_failed', 'error': str(exc)[:120]}); return
+            self.log.append({'step': 'conflict_failed', 'error': str(exc)[:120]}); raise
         merged = 0
         for g in reps:
             rs = [r for r in (self._ref(x) for x in g.get('refs', []) or []) if r in refs]
