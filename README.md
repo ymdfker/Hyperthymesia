@@ -39,7 +39,7 @@
   $env:HY_AGENTS="claude"; irm https://github.com/ymdfker/Hyperthymesia/releases/latest/download/install.ps1 | iex
   ```
 
-看到“完成”字样即可。
+看到“完成”或“Complete”字样即可。
 
 **2. 重启 Claude Code**
 
@@ -71,7 +71,7 @@ hyperthymesia doctor --agent claude
   $env:HY_AGENTS="codex"; irm https://github.com/ymdfker/Hyperthymesia/releases/latest/download/install.ps1 | iex
   ```
 
-看到“完成”字样即可。
+看到“完成”或“Complete”字样即可。
 
 **2. 重启 Codex**
 
@@ -114,7 +114,7 @@ hyperthymesia doctor --agent codex
   $env:HY_AGENTS="workbuddy"; irm https://github.com/ymdfker/Hyperthymesia/releases/latest/download/install.ps1 | iex
   ```
 
-看到“完成”字样即可。
+看到“完成”或“Complete”字样即可。
 
 **2. 重启 WorkBuddy**
 
@@ -150,7 +150,7 @@ hyperthymesia doctor --agent workbuddy
   $env:HY_AGENTS="qoder"; irm https://github.com/ymdfker/Hyperthymesia/releases/latest/download/install.ps1 | iex
   ```
 
-看到“完成”字样即可。
+看到“完成”或“Complete”字样即可。
 
 **2. 登录 qodercli**
 
@@ -193,7 +193,7 @@ hyperthymesia doctor --agent qoder
   $env:HY_AGENTS="dsh"; irm https://github.com/ymdfker/Hyperthymesia/releases/latest/download/install.ps1 | iex
   ```
 
-看到“完成”字样即可。
+看到“完成”或“Complete”字样即可。
 
 **2. 确认 dsh 已填 DeepSeek API key**
 

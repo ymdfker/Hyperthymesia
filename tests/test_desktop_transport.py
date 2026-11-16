@@ -115,6 +115,11 @@ class DesktopTransportTest(unittest.TestCase):
         transcript.write_text('\n'.join(json.dumps(e) for e in events))
         self.assertFalse(completed_turns(transcript,'codebuddy')[0]['complete'])
 
+    def test_public_windows_installer_needs_no_bom_or_http_charset(self):
+        raw=(pathlib.Path(__file__).parents[1]/'install.ps1').read_bytes()
+        self.assertFalse(raw.startswith(b'\xef\xbb\xbf'))
+        raw.decode('ascii')  # irm | iex must work even with a legacy HTTP charset fallback.
+
     def test_internal_hooks_skip_without_creating_store(self):
         with mock.patch.dict(os.environ,{'HYPERTHYMESIA_INTERNAL_CALL':'1'}):self.hook('prompt-submit',{'session_id':'internal','prompt':'must not record'})
         self.assertFalse((self.root/'memory/state.db').exists())
