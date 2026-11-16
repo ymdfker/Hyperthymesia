@@ -58,3 +58,35 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release create "$GITHUB_REF_NAME" assets/* install.sh install.ps1 --title "$GITHUB_REF_NAME" --generate-notes
+
+  verify-windows-install:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: release
+    runs-on: windows-latest
+    steps:
+      - name: 验证公开一键安装下载本次发行（不调用模型）
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $expectedVersion = $env:GITHUB_REF_NAME -replace '^v', ''
+          $testUserDirectory = Join-Path $env:RUNNER_TEMP ('hyperthymesia-install-' + [guid]::NewGuid().ToString('N'))
+          New-Item -ItemType Directory -Force -Path $testUserDirectory | Out-Null
+          $previousUserPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+          $env:USERPROFILE = $testUserDirectory
+          $env:HOME = $testUserDirectory
+          $env:HYPERTHYMESIA_HOME = Join-Path $testUserDirectory 'memory'
+          $env:WORKBUDDY_CONFIG_DIR = Join-Path $testUserDirectory '.workbuddy'
+          $env:CODEBUDDY_CONFIG_DIR = $env:WORKBUDDY_CONFIG_DIR
+          $env:HY_AGENTS = 'workbuddy'
+          try {
+            irm https://github.com/ymdfker/Hyperthymesia/releases/latest/download/install.ps1 | iex
+            $installedBinary = Join-Path $testUserDirectory '.hyperthymesia/bin/hyperthymesia.exe'
+            $actualVersion = & $installedBinary --version
+            if ($LASTEXITCODE -ne 0 -or "$actualVersion".Trim() -ne $expectedVersion) { throw 'Installed version does not match release tag' }
+            $settings = Get-Content -Raw (Join-Path $env:WORKBUDDY_CONFIG_DIR 'settings.json') | ConvertFrom-Json
+            $mcp = Get-Content -Raw (Join-Path $env:WORKBUDDY_CONFIG_DIR 'mcp.json') | ConvertFrom-Json
+            if (-not $settings.hooks.UserPromptSubmit -or -not $mcp.mcpServers.hyperthymesia) { throw 'Desktop integration files missing' }
+            Write-Host "Verified public installer version $actualVersion and isolated WorkBuddy configuration; model calls: 0"
+          } finally {
+            [Environment]::SetEnvironmentVariable('Path', $previousUserPath, 'User')
+          }

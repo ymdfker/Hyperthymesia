@@ -13,7 +13,7 @@
 
 找到你用的 agent，只按那一节一步步做。用多个 agent 就每一节各做一遍。
 
-当前发行版为 **v0.2.5**，包含WorkBuddy桌面接入、防递归、后台选模和建议保存规则修复。下面的一键命令从GitHub最新发行版安装。macOS命令行已做兼容测试；IDE／桌面完整验收和Windows真实安装链路尚未全部完成。
+当前发行版为 **v0.2.6**，包含Windows桌面接入、CLI参数传递、BOM、进程锁、未完成轮次恢复和写入失败处理修复，以及v0.2.5的修复。下面的一键命令从GitHub最新发行版安装。macOS命令行已做兼容测试；IDE／桌面完整验收和Windows真实安装链路尚未全部完成。
 
 - [Claude Code](#claude-code)
 - [Codex](#codex)
@@ -98,7 +98,7 @@ hyperthymesia doctor --agent codex
 
 **桌面验证范围**：后台整理曾被自身钩子记录并引发递归；v0.2.5已加入统一内部任务隔离。之后独立桌面短测的核心事实写入和跨会话召回7/7正确，但存在后台耗时及模型选择偏差，整体仅部分通过。新的选模和建议保存规则已完成无模型检查，尚未重新做付费端到端质量验收；退出尾写的宿主局限见上文。详见[兼容报告](docs/desktop-compat.md)。
 
-**发布状态：v0.2.5已包含桌面配置入口修复，下列一键安装或升级命令可安装该版本。**
+**发布状态：v0.2.6已包含桌面配置入口及本轮Windows修复，下列一键安装或升级命令可安装该版本。**
 
 **1. 安装并接入**
 
@@ -214,7 +214,7 @@ hyperthymesia doctor --agent dsh
 
 “写入提供方”应显示 `dsh`。这只确认整理提供方；还需要确认 MCP 已连接、钩子实际触发。完整检查步骤见[兼容核查清单](docs/desktop-compat.md)。
 
-### Windows桌面接入修复（源码，尚未随v0.2.5发行）
+### Windows桌面接入修复（v0.2.6）
 
 - Qoder用户级MCP与钩子均使用`~/.qoder/settings.json`；升级接入会先备份，只迁移本服务在旧`mcp.json`中的条目。
 - Windows通过Node直接启动实际CLI脚本，避免`.cmd`截断多行规则；后台Qoder调用移除SDK启动模式标记，保留认证位置和其他环境。不会强制把所有新版Qoder降级。
@@ -307,8 +307,8 @@ agent 的最终回复和本轮代码改动；积压够多或会话结束时，�
 - **一周真实使用**：正常工作中观察记错、漏记、多记及注入量，每隔两三天检查记忆库和整理日志。目前没有长期实用结论。
 - **GUI 完整验收**：Claude VS Code／JetBrains／Desktop Code、Codex IDE／App、Qoder IDE／JetBrains、CodeBuddy IDE、WorkBuddy 桌面及 dsh TUI；不能沿用 CLI 或 dsh web 的通过结论。每种形态的简短操作见兼容清单。
 - **S9 环境缺项**：独立 CodeBuddy IDE 本机未安装，仍无实机结果。Qoder 禁用、Codex 提交／停止已补验。WorkBuddy 开关失效已归为宿主已知问题，不列为记忆服务待修复项，不增加补丁；它影响用户停用钩子，不妨碍正常开启时的记忆流程，也不能代替桌面完整读写验收。详细证据见[兼容报告 §6](docs/desktop-compat.md#6-s9-剩余项收尾与-workbuddy-根因2026-11-15最新结果)。
-- **Windows 端到端**：已有单元测试与 CI，尚未验证真实一键安装、宿主钩子触发、记录和注入。可先用假整理模型做不耗额度的 Windows 集成测试。
-- **后续发布验收**：v0.2.5已发布本轮源码修复；构建、打包检查不等于真实桌面或Windows端到端全部通过，仍需按上面的范围继续验收。
+- **Windows桌面端到端**：Windows CI覆盖参数传递、BOM、进程锁、记录恢复、打包和无模型一键安装；仍未代替用户实际宿主登录、MCP可见性和完整问答验收。
+- **后续发布验收**：v0.2.6已发布本轮Windows修复；构建、打包与无模型安装检查不等于真实桌面完整验收，仍需按上面的范围继续验证。
 
 可选后续：v0.2.4 全量回归、Gitee 附件匿名下载验证。无用的本地／远端 v0.2.0 标签已删除。任何需要正常模型回合的测试，执行前先报额度预估。
 
@@ -353,7 +353,7 @@ irm https://github.com/ymdfker/Hyperthymesia/releases/latest/download/install.ps
 
 No Python installation is required for the packaged executable. Wait for the installer to report completion. Repeat for each agent you use.
 
-**Current release: v0.2.5.** It includes the WorkBuddy desktop configuration fix, internal-task isolation, updated background model selection and a shared assistant-suggestion policy. The commands above install the latest GitHub Release. Users of v0.2.4 should rerun installation and restart WorkBuddy.
+**Current release: v0.2.6.** It includes Windows desktop configuration and CLI transport fixes, BOM handling, native process locks, interrupted-turn recovery and write-failure handling, plus the v0.2.5 fixes. The commands above install the latest GitHub Release. Users of v0.2.5 or earlier should rerun installation and restart their agent.
 
 ### 2. Complete your agent's setup
 
@@ -426,7 +426,7 @@ Put the actual key in the named environment variable, not in this file.
 
 **Uninstall:** run `hyperthymesia uninstall claude`, substituting your agent's identifier. It removes Hyperthymesia's integration entries and preserves other settings. Memories remain on disk; deleting `~/.hyperthymesia/` permanently removes them.
 
-### Windows desktop fixes in source (not yet in v0.2.5)
+### Windows desktop fixes (v0.2.6)
 
 Qoder's user MCP configuration now shares `~/.qoder/settings.json` with hooks. Integration backs up files and migrates only Hyperthymesia's obsolete MCP entry. Windows CLI launches use the actual Node/JavaScript entrypoint, preserving multiline arguments; inherited Qoder SDK transport markers are removed without deleting authentication locations. Newer CLI versions are not automatically downgraded.
 
@@ -439,7 +439,7 @@ Use `HYPERTHYMESIA_HOME` for the memory directory. Executable extraction still u
 - **Command not found:** reopen Terminal/PowerShell. If necessary, use `~/.local/bin/hyperthymesia` on macOS/Linux or `%USERPROFILE%\.hyperthymesia\bin\hyperthymesia.exe` on Windows (the latter is a Command Prompt path; in PowerShell use `$env:USERPROFILE`).
 - **macOS blocks the executable:** open System Settings → Privacy & Security and choose Open Anyway if offered.
 - **New information is missing:** inspect the capture/write logs and allow background writing to finish; a connected MCP server alone does not prove that hooks captured or saved the conversation.
-- **IDE, desktop and Windows support:** CLI acceptance does not establish equivalent behavior in every GUI. Several GUI variants, a real Windows installation/hooks workflow and a full week of everyday use remain unverified. See [compatibility notes](docs/desktop-compat.md) for scope and known issues.
+- **IDE, desktop and Windows support:** CLI acceptance does not establish equivalent behavior in every GUI. Several GUI variants, actual Windows desktop authentication/full conversations and a full week of everyday use remain unverified. Windows CI checks packaging and installation without a live model. See [compatibility notes](docs/desktop-compat.md) for scope and known issues.
 
 ### Command reference
 
