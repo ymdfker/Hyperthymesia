@@ -70,7 +70,8 @@ def _doctor(argv):
         print('  鉴权及真实写入：尚未验证；桌面已登录不代表CLI可调用，不会自动花额度试探。')
     from .store import state
     st = state(paths.home())
-    pending = st.execute('SELECT SUM(completed_at IS NULL), SUM(completed_at IS NOT NULL) FROM backlog WHERE written=0').fetchone()
+    try: pending = st.execute('SELECT SUM(completed_at IS NULL), SUM(completed_at IS NOT NULL) FROM backlog WHERE written=0').fetchone()
+    finally: st.close()
     print('待处理：已完成%d轮，未完成%d轮（不会把未完成轮次冒充完成）' % (pending[1] or 0, pending[0] or 0))
     if s['provider'] == 'openai':
         key, var = config.api_key(s)
