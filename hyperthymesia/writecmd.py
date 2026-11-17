@@ -7,7 +7,7 @@ from pathlib import Path
 
 from . import changes, paths, writer
 from .hooks import est_tokens
-from .store import Store, state
+from .store import Store, state, tx
 
 BATCH_TOKENS = int(os.environ.get('HYPERTHYMESIA_BATCH_TOKENS', '16000'))
 EXPLICIT = re.compile(r'记住|记一下|记一条|记下|别忘|remember|keep in mind|note that', re.I)   # 用户明确要求记住
@@ -89,10 +89,17 @@ def write_project(project):
                 if failures: raise RuntimeError('部分写入失败，原材料仍在积压；请查看logs/writer.log。' + failures[-1])
                 return total
             tried |= {(r['session'], r['turn']) for r in rows}
+            # 失败批次沿用原分组，不能因为新增积压或阈值变化丢失续接位置。
+            remaining = {(r['session'], r['turn']): r for r in rows}
+            for checkpoint in st.execute('SELECT payload FROM writer_progress WHERE project=? ORDER BY updated_at', (project,)).fetchall():
+                keys = [tuple(k) for k in json.loads(checkpoint[0]).get('turn_keys', [])]
+                if keys and all(k in remaining for k in keys):
+                    total += _write_rows(project, st, [remaining.pop(k) for k in keys], failures, fixed_batch=True)
+            rows = [r for r in rows if (r['session'], r['turn']) in remaining]
             total += _write_rows(project, st, rows, failures)
 
 
-def _write_rows(project, st, rows, failures=None):
+def _write_rows(project, st, rows, failures=None, fixed_batch=False):
     if not rows: return 0
     if failures is None: failures = []
     stores = {'u': Store(paths.personal_db(), 'u'), 'p': Store(paths.project_db(project)[0], 'p') if project else None}
@@ -101,11 +108,24 @@ def _write_rows(project, st, rows, failures=None):
         turns = [{'session': r['session'], 'turn': r['turn'], 'user': r['user_text'] or '', 'assistant': r['assistant_text'] or '',
                   'changes': changes.change_block(r['diff'] or '', r['numstat'] or ''), 'at': r['started_at']} for r in batch]
         t0 = time.time()
+        before = {r[0]: len(json.loads(r[1]).get('attempts', [])) for r in st.execute('SELECT batch,payload FROM writer_progress WHERE project=?', (project,))}
         try:
             res = writer.write_batch(paths.home(), stores, turns, st, project)
         except Exception as exc:
             message = str(exc)[:300]
-            _log({'at': time.strftime('%Y-%m-%dT%H:%M:%S'), 'project': project, 'turns': len(batch), 'status': 'failed', 'error': message})
+            pending = []; usage = {}; calls = 0; replies = []
+            keys = {(r['session'], r['turn']) for r in batch}
+            for row in st.execute('SELECT batch,payload FROM writer_progress WHERE project=?', (project,)):
+                data = json.loads(row[1])
+                if {tuple(k) for k in data.get('turn_keys', [])} != keys: continue
+                pending.append({'batch': row[0], 'completed_stages': data.get('done', [])})
+                attempts = data.get('attempts', [])[before.get(row[0], 0):]; calls += len(attempts)
+                for attempt in attempts:
+                    replies.append(attempt.get('reply', ''))
+                    for k, v in attempt['usage'].items():
+                        if isinstance(v, (int, float)): usage[k] = usage.get(k, 0) + v
+            _log({'at': time.strftime('%Y-%m-%dT%H:%M:%S'), 'project': project, 'turns': len(batch), 'status': 'failed',
+                  'error': message, 'pending': pending, 'calls': calls, 'usage': usage, 'answers': replies, 'secs': round(time.time() - t0, 1)})
             if failures is not None: failures.append(message)
             return 0
         # 程序兜底（便宜模型偶发漏写，兼容实测 28.14）：用户明确要求记住的轮次，这一批却没写出任何新记忆 → 逐轮单独重写一次
@@ -113,10 +133,15 @@ def _write_rows(project, st, rows, failures=None):
             errors_before = len(failures)
             for r in [r for r in batch if EXPLICIT.search(r['user_text'] or '')]: flush([r], True)
             if len(failures) != errors_before: return 0
-        st.executemany('UPDATE backlog SET written=1 WHERE session=? AND turn=?', [(r['session'], r['turn']) for r in batch])
+        with tx(st):
+            st.executemany('UPDATE backlog SET written=1 WHERE session=? AND turn=?', [(r['session'], r['turn']) for r in batch])
         _log({'at': time.strftime('%Y-%m-%dT%H:%M:%S'), 'project': project, 'turns': len(batch), 'calls': res['calls'], 'usage': res['usage'],
-              'new_facts': res['new_facts'], 'secs': round(time.time() - t0, 1), 'steps': [x.get('step') for x in res['log']]})
+              'new_facts': res['new_facts'], 'secs': round(time.time() - t0, 1), 'steps': [x.get('step') for x in res['log']],
+              'batch': res.get('batch'), 'answers': [a.get('reply', '') for a in res.get('attempts', [])] or res.get('answers', [])})
+        if res.get('batch'):
+            st.execute('DELETE FROM writer_progress WHERE batch=?', (res['batch'],))
         return len(batch)
+    if fixed_batch: return flush(rows)
     for r in rows:
         n = est_tokens((r['user_text'] or '') + (r['assistant_text'] or '')) + est_tokens(changes.change_block(r['diff'] or '', r['numstat'] or ''))
         if batch and size + n > BATCH_TOKENS: done += flush(batch); batch = []; size = 0

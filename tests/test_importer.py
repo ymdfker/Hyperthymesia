@@ -51,6 +51,19 @@ class ImportTest(unittest.TestCase):
         self.assertEqual(importer.import_sessions('claude', ss, write=False), {'s1': 0})   # 再导一次不重复
         self.assertEqual(st.execute("SELECT user_text FROM backlog WHERE session='s1:import'").fetchall()[0][0], '第一轮')
 
+    def test_codex_desktop_messages_pair_by_turn_and_exclude_injection(self):
+        p = self.root / 'desktop.jsonl'
+        def message(text, tid, kind):
+            return {'type': 'response_item', 'timestamp': '2026-11-16', 'payload': {'type': 'message', 'role': 'user',
+                'content': [{'type': 'input_text', 'text': text}],
+                'internal_chat_message_metadata_passthrough': {'turn_id': tid, 'content_item_kinds': [kind]}}}
+        W(p, [message('系统环境', 'a', 'environments.environment_context'), message('第一轮真实问题', 'a', 'user.text'),
+              message('第二轮真实问题', 'b', 'user.text'),
+              {'type': 'event_msg', 'payload': {'type': 'task_complete', 'turn_id': 'a', 'last_agent_message': '第一轮最终回复'}},
+              {'type': 'event_msg', 'payload': {'type': 'task_complete', 'turn_id': 'b', 'last_agent_message': '第二轮最终回复'}}])
+        rows, _ = importer._codex(p)
+        self.assertEqual([r[1:] for r in rows], [['第一轮真实问题', '第一轮最终回复'], ['第二轮真实问题', '第二轮最终回复']])
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -195,7 +195,7 @@ def prices(provider, ids, old):
 
 # ---------------------------------------------------------------- 质量、速度和实际 token 准入
 # 短批/准入材料的宽松上限，不截断正式写入、不改变批量阈值。
-SELECTION_VERSION = 2
+SELECTION_VERSION = 3
 MAX_SCREEN_SECONDS = 120
 MAX_OUTPUT_RATIO = 4
 MAX_CANDIDATES = 2
@@ -209,11 +209,47 @@ PROBE_PROMPT = (
     '用户：每周四发布，其他不变。')
 
 
-def _acceptable(row):
-    return (row.get('quality_pass') is True and isinstance(row.get('seconds'), (int, float))
-            and 0 < row['seconds'] <= MAX_SCREEN_SECONDS
-            and row.get('input_tokens', 0) > 0 and row.get('output_tokens', 0) > 0
-            and row['output_tokens'] / row['input_tokens'] <= MAX_OUTPUT_RATIO)
+def _screen(row):
+    reasons = []; warnings = []
+    if row.get('quality_pass') is not True: reasons.append('质量或回复格式未通过')
+    seconds = row.get('seconds')
+    if not isinstance(seconds, (int, float)) or not 0 < seconds <= MAX_SCREEN_SECONDS:
+        reasons.append('耗时未通过')
+    inp, out = row.get('input_tokens'), row.get('output_tokens')
+    known = (row.get('usage_status') != 'unknown' and isinstance(inp, (int, float)) and inp > 0
+             and isinstance(out, (int, float)) and out > 0)
+    if known:
+        if out / inp > MAX_OUTPUT_RATIO: reasons.append('已知输出输入比例超限')
+    else:
+        warnings.append('token用量未知，未检查输出输入比例')
+    return not reasons, reasons, warnings
+
+
+def _acceptable(row): return _screen(row)[0]
+
+
+def _probe_quality(got):
+    """只评分这份固定准入题；不拿这些匹配规则审核用户真实记忆。"""
+    if not isinstance(got, dict) or not isinstance(got.get('facts'), dict):
+        return False, ['回复缺少facts对象']
+    facts = got['facts']; issues = []
+    timeout = re.sub(r'\s+', '', str(facts.get('timeout', ''))).casefold()
+    if timeout not in ('60秒', '60s', '60seconds', '60second', '1分钟', '1min', '1minute'):
+        issues.append('超时新值未完整保留')
+    condition = re.sub(r'\s+', '', str(facts.get('condition', '')))
+    if not re.fullmatch(r'(仅|只)(在)?工作日(才)?(启用|开启|运行|生效)', condition):
+        issues.append('工作日限定未完整保留')
+    if str(facts.get('reviewer', '')).strip().casefold() != 'priya': issues.append('评审人新值错误')
+    release = re.sub(r'\s+', '', str(facts.get('release', '')))
+    if not re.fullmatch(r'每(周|星期|礼拜)(四|4)(发布|上线)', release): issues.append('每周四发布未完整保留')
+    suggestions = got.get('suggestions')
+    if not isinstance(suggestions, list) or not suggestions or not all(isinstance(x, str) for x in suggestions):
+        issues.append('未确认建议格式错误')
+    else:
+        text = '\n'.join(suggestions)
+        if not all(k in text for k in ('现场', '日志')): issues.append('具体建议遗漏')
+        if '通知' in text: issues.append('保存了写通知的客套提议')
+    return not issues, issues
 
 
 def acceptance():
@@ -225,28 +261,30 @@ def acceptance():
 
 def _probe(provider, model):
     from . import providers, writer
+    from .redact import redact
     old = os.environ.get('HYPERTHYMESIA_MODEL'); os.environ['HYPERTHYMESIA_MODEL'] = model
     started = time.monotonic()
     row = {'quality_pass': False, 'source': '条件、更正、建议准入题'}
     try:
         rep = providers.call(paths.home(), PROBE_SYSTEM, PROBE_PROMPT)
-        got = writer.parse(rep.text)
-        expected = {'timeout': '60秒', 'condition': '仅工作日启用', 'reviewer': 'Priya', 'release': '每周四发布'}
-        facts = got.get('facts') or {}; suggestions = got.get('suggestions') or []
-        # 此处只对固定准入题评分，绝不拿关键词规则审核真实用户记忆。
-        good = all(re.sub(r'\s+', '', str(facts.get(k, ''))) == v for k, v in expected.items())
-        good = good and isinstance(suggestions, list) and len(suggestions) == 1
-        text = str(suggestions[0]) if suggestions else ''
-        good = good and '现场' in text and '日志' in text and '通知' not in text
-        row.update(quality_pass=good, input_tokens=rep.usage.get('input_tokens', 0),
-                   output_tokens=rep.usage.get('output_tokens', 0), cost=rep.usage.get('cost'))
+        row['reply'] = redact(rep.text)[0]
+        # 先保存用量；格式错误也不能抹掉已发生的消耗。
+        row.update(input_tokens=rep.usage.get('input_tokens', 0), output_tokens=rep.usage.get('output_tokens', 0),
+                   cost=rep.usage.get('cost'), usage_status=rep.usage.get('usage_status'))
+        good, issues = _probe_quality(writer.parse(rep.text)); row['quality_issues'] = issues
+        row['quality_pass'] = good
     except Exception as exc:
-        row['error'] = str(exc)[:160]
+        row['error'] = redact(str(exc))[0][:300]
     finally:
         row['seconds'] = max(0.001, round(time.monotonic() - started, 3))
         if old is None: os.environ.pop('HYPERTHYMESIA_MODEL', None)
         else: os.environ['HYPERTHYMESIA_MODEL'] = old
-    row['ok'] = _acceptable(row)
+    row['ok'], row['reasons'], row['warnings'] = _screen(row)
+    if row['warnings']: row['usage_status'] = 'unknown'
+    else: row['usage_status'] = 'reported'
+    directory = paths.home() / 'logs'; directory.mkdir(exist_ok=True)
+    with (directory / 'models.log').open('a', encoding='utf-8') as f:
+        f.write(json.dumps(dict(row, provider=provider, model=model), ensure_ascii=False) + '\n')
     return row
 
 
@@ -268,11 +306,20 @@ def choose(provider, refresh=False):
         except (KeyError, ValueError): continue
         if 0 <= age < TTL: recent.setdefault(row['model'], []).append(row)
     # 同一模型任一已有质量/性能失败不能被另一次简单通过掩盖。
+    # 旧自动结果中明确质量通过、仅缺token统计的记录可以重新判定，无需再次收费试探。
+    if time.time() - c.get('at', 0) < TTL:
+        for row in c.get('checked', []):
+            if row.get('model') in ids and row.get('quality_pass') is True and _acceptable(row):
+                recent.setdefault(row['model'], []).append(row)
     qualified = [m for m, rows in recent.items() if all(_acceptable(r) for r in rows)]
     price, source = prices(provider, ids, c.get('prices'))
     preferred = codex_affordable(ids) if provider == 'codex' else ids
     order = sorted(preferred, key=lambda m: (m not in price, price.get(m, float('inf'))))
-    checked = [{'model': m, 'ok': all(_acceptable(r) for r in rows), 'source': '已有端到端验收'} for m, rows in recent.items()]
+    checked = []
+    for m, rows in recent.items():
+        for r in rows:
+            ok, reasons, warnings = _screen(r)
+            checked.append(dict(r, model=m, ok=ok, reasons=reasons, warnings=warnings))
     chosen = next((m for m in order if m in qualified), '')
     if not chosen:
         # 旧缓存若没有新标准的数据，不算准入通过；不再遍历整张模型表。
@@ -283,7 +330,10 @@ def choose(provider, refresh=False):
                        'source': source, 'checked': checked, 'selection_version': SELECTION_VERSION, 'evidence': fingerprint}
     _save(cache)
     if not chosen:
-        raise ProviderError('没有通过质量、速度和token准入的后台模型；积压保留。请查看 doctor 或明确配置已验收模型，不能回退到未验收默认模型。')
+        details = '; '.join('%s: %s' % (r.get('model'), ','.join(r.get('reasons') or ['无可用准入结果'])) for r in checked)
+        raise ProviderError('未选到可用后台模型，积压保留。' + details +
+                            '；详见logs/models.log。用户可明确指定本机支持的模型：在' + str(paths.home() / 'config.toml') +
+                            '中设置 [writer] model = "实际支持的模型ID"。显式选择跳过自动准入，不代表已通过质量验收；不会自动改用其他宿主或付费API。')
     return chosen
 
 
@@ -291,8 +341,12 @@ def explain(provider):
     c = _load().get(provider) or {}
     if not c: return '尚未识别（首次写入优先复用已有验收；无记录时最多2次准入请求）'
     stale = c.get('selection_version') != SELECTION_VERSION
-    return '%s（%s；依据：%s）' % (c.get('model') or '无通过准入的模型',
-              '旧版缓存待重新评估，不直接沿用' if stale else '已按质量、速度、token筛选', c.get('source', ''))
+    selected = next((r for r in c.get('checked', []) if r.get('model') == c.get('model')), {})
+    note = '旧版缓存待重新评估，不直接沿用' if stale else '已按质量与速度筛选'
+    if c.get('model') and _screen(selected)[2]: note += '；token用量未知，未检查用量比例'
+    if not c.get('model') and c.get('checked'):
+        note += '；' + '; '.join('%s:%s' % (r.get('model'), ','.join(r.get('reasons') or ['参见logs/models.log'])) for r in c['checked'])
+    return '%s（%s；依据：%s）' % (c.get('model') or '无通过准入的模型', note, c.get('source', ''))
 
 
 def forget(provider):

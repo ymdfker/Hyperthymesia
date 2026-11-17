@@ -1,10 +1,54 @@
 """Regressions for reported Windows failures; generated fixtures, no live model or account."""
 import io,json,os,pathlib,shutil,subprocess,sys,tempfile,unittest
+from pathlib import Path
 from unittest import mock
 from hyperthymesia import hooks,install,launch,paths,providers,writecmd,writer
 from hyperthymesia.store import close_all,state
 
 class DesktopTransportTest(unittest.TestCase):
+    def test_bad_automatic_wrapper_does_not_hide_desktop_entry(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); bad = root/'front/codebuddy.cmd'; bad.parent.mkdir()
+            bad.write_text('@echo off\nexit /b 1\n')
+            desktop = root/'WorkBuddy'; entry = desktop/'resources/app.asar.unpacked/cli/bin/codebuddy'
+            entry.parent.mkdir(parents=True); entry.write_text('#!/usr/bin/env node\n')
+            node = root/'node.exe'; node.write_text('')
+            with mock.patch.dict(os.environ, {}, clear=True), mock.patch.object(launch, 'WINDOWS', True), \
+                 mock.patch.object(launch, '_windows_workbuddy_roots', return_value=[desktop]), \
+                 mock.patch.object(launch.shutil, 'which', side_effect=lambda n: str(bad if n=='codebuddy' else node)), \
+                 mock.patch('os.get_exec_path', return_value=[str(bad.parent)]):
+                self.assertEqual(launch.find_codebuddy(), str(entry))
+                with mock.patch.dict(os.environ, {'HYPERTHYMESIA_CODEBUDDY_CLI': str(bad)}):
+                    with self.assertRaisesRegex(ValueError, 'Cannot resolve'):
+                        launch.find_codebuddy()
+
+    def test_search_continues_to_later_valid_npm_shim(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); front = root/'front'; good = root/'npm'; front.mkdir(); good.mkdir()
+            bad = front/'codebuddy.cmd'; bad.write_text('@echo off\n')
+            shim = good/'codebuddy.cmd'; shim.write_text('@echo off\n')
+            package = good/'node_modules/@tencent-ai/codebuddy-code'; package.mkdir(parents=True)
+            (package/'package.json').write_text(json.dumps({'bin': {'codebuddy': 'entry.js'}}))
+            target = package/'entry.js'; target.write_text('console.log("ok")')
+            node = good/'node.exe'; node.write_text('')
+            with mock.patch.dict(os.environ, {}, clear=True), mock.patch.object(launch, 'WINDOWS', True), \
+                 mock.patch.object(launch, '_windows_workbuddy_roots', return_value=[]), \
+                 mock.patch.object(launch.shutil, 'which', side_effect=lambda n: str(bad if n=='codebuddy' else node)), \
+                 mock.patch('os.get_exec_path', return_value=[str(front), str(good)]):
+                found = launch.find_codebuddy()
+                self.assertEqual(found, str(shim))
+                self.assertEqual(launch.command(found, '@tencent-ai/codebuddy-code', 'codebuddy')[-1], str(target.resolve()))
+
+    def test_extensionless_shell_shim_resolves_before_node_launch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); shim = root/'codebuddy'; shim.write_text('#!/bin/sh\nexit 1\n')
+            package = root/'node_modules/@tencent-ai/codebuddy-code'; package.mkdir(parents=True)
+            (package/'package.json').write_text(json.dumps({'bin': {'codebuddy': 'main.mjs'}}))
+            target = package/'main.mjs'; target.write_text('console.log("ok")')
+            node = root/'node.exe'; node.write_text('')
+            with mock.patch.object(launch, 'WINDOWS', True):
+                self.assertEqual(launch.command(str(shim), '@tencent-ai/codebuddy-code', 'codebuddy'), [str(node), str(target.resolve())])
+
     def setUp(self):
         self.tmp=tempfile.TemporaryDirectory();self.root=pathlib.Path(self.tmp.name)
         env={k:v for k,v in os.environ.items() if not k.startswith('HYPERTHYMESIA_')}

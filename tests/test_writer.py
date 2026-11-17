@@ -52,17 +52,19 @@ class WriterTest(unittest.TestCase):
         self.assertFalse(self.p.fact(old)['active'])
         self.assertTrue(self.p.fact(adv)['active']); self.assertIn('basis_changed', self.p.fact(adv)['advice_status'])
 
-    def test_ref_typo_fixed_and_unmatched_quote_asked_then_dropped(self):
+    def test_ref_typo_fixed_but_unmatched_quote_kept_pending(self):
         o = self.p.add_object('滨江店'); old = self.p.add_fact([o], '员工8人', evidence=[('s0:1:u', '8人')])
         t = self.turns(('滨江店现在10个员工了。', '好的。'))
         bad = 'rp%d' % old + 'x'   # 多一个字：编辑距离 1，可纠正
         main = J(memories=[{'title': '员工', 'text': '滨江店员工10人', 'kind': 'fact', 'about': ['p%d' % o], 'evidence': ['滨江店现在10个员工'], 'invalidates': [bad]},
                            {'title': '编造', 'text': '店长换人了', 'kind': 'fact', 'about': ['p%d' % o], 'evidence': ['店长已经换成老王'], 'invalidates': []}])
-        r = self.run_batch(t, main, J(quotes=['还是对不上的引用']), J(replacements=[]))
+        with self.assertRaises(writer.PendingEvidence):
+            self.run_batch(t, main, J(quotes=['还是对不上的引用']))
         texts = [f['text'] for f in self.p.facts()]
         self.assertIn('滨江店员工10人', texts); self.assertNotIn('员工8人', texts); self.assertNotIn('店长换人了', texts)
-        steps = [x['step'] for x in r['log']]
-        self.assertIn('ref_fixed', steps); self.assertIn('ask_quotes', steps); self.assertIn('dropped_unsourced', steps)
+        checkpoint = json.loads(state(self.home).execute('SELECT payload FROM writer_progress').fetchone()[0])
+        self.assertNotIn('main', checkpoint['done'])
+        self.assertEqual(checkpoint['main_output']['memories'][1]['text'], '店长换人了')
 
     def test_need_objects_delta_merge_keeps_first_answer(self):
         o = self.p.add_object('良渚店')
@@ -129,6 +131,118 @@ class WriterTest(unittest.TestCase):
 
     def test_parse_local_repairs(self):
         self.assertEqual(writer.parse('```json\n{"a":[1,2,],}\n```'), {'a': [1, 2]})
+
+    def test_missing_array_bracket_preserves_every_value(self):
+        raw = '{"memories":[{"text":"原文含,]不能改","evidence":["原文","invalidates":[]}]}'
+        got = writer.parse(raw)
+        self.assertEqual(got, {'memories': [{'text': '原文含,]不能改', 'evidence': ['原文'], 'invalidates': []}]})
+        with self.assertRaises(ValueError): writer.parse('{"text":"他说"好""}')
+
+    def test_quote_repair_receives_original_and_keeps_replacement(self):
+        o = self.p.add_object('版本'); old = self.p.add_fact([o], '版本1.0')
+        turns = self.turns(('版本改到2.0。', '已发布 **2.0**，仓库 https://example.org/repo.git。'))
+        main = J(replacements=[{'refs': ['rp%d' % old], 'memories': [
+            {'title': '发布结果', 'text': '已发布2.0', 'kind': 'fact', 'about': ['p%d' % o], 'evidence': ['发布成功2.0']}]}])
+        def repair(prompt):
+            self.assertIn(turns[0]['assistant'], prompt)
+            self.assertIn(turns[0]['user'], prompt)
+            return J(quotes=[['已发布 **2.0**']])
+        result = self.run_batch(turns, main, repair, J(), J(replacements=[]))
+        self.assertFalse(self.p.fact(old)['active'])
+        fact = next(f for f in self.p.facts() if f['text'] == '已发布2.0')
+        self.assertEqual(fact['source_role'], 'assistant')
+        self.assertEqual(self.p.db.execute('SELECT quote FROM evidence WHERE fact=?', (fact['id'],)).fetchone()[0], '已发布 **2.0**')
+
+    def test_resume_gap_failure_does_not_extract_or_save_main_twice(self):
+        turns = self.turns(('我有一只叫年糕的猫。', '已完成项目部署。'))
+        main = J(objects=[{'key': 'deploy', 'name': '部署', 'scope': 'project'}], memories=[
+            {'title': '部署结果', 'text': '项目部署完成', 'about': ['deploy'], 'evidence': ['已完成项目部署']}])
+        def failed(_): raise providers.ProviderError('补漏请求连接失败')
+        with self.assertRaises(providers.ProviderError): self.run_batch(turns, main, failed)
+        first = self.p.facts()[0]
+        gap = J(objects=[{'key': 'cat', 'name': '年糕', 'scope': 'personal'}], memories=[
+            {'title': '宠物', 'text': '用户的猫叫年糕', 'about': ['cat'], 'evidence': ['一只叫年糕的猫']}])
+        result = self.run_batch(turns, gap)
+        self.assertEqual(result['calls'], 1)
+        self.assertEqual(self.p.facts()[0]['id'], first['id'])
+        self.assertEqual(len(self.p.facts()), 1)
+        self.assertEqual(self.u.facts()[0]['text'], '用户的猫叫年糕')
+
+    def test_resume_only_retries_bad_quotes_and_keeps_good_entries(self):
+        turns = self.turns(('项目端口8080，超时45秒。', '收到。'))
+        main = J(objects=[{'key': 'k', 'name': '配置', 'scope': 'project'}], memories=[
+            {'title': '端口', 'text': '项目端口8080', 'about': ['k'], 'evidence': ['端口8080']},
+            {'title': '超时', 'text': '项目超时45秒', 'about': ['k'], 'evidence': ['不存在的超时原句']}])
+        with self.assertRaises(writer.PendingEvidence): self.run_batch(turns, main, J(quotes=['仍不匹配']))
+        port = self.p.facts()[0]
+        result = self.run_batch(turns, J(quotes=['超时45秒']))
+        self.assertEqual(result['calls'], 1)
+        self.assertEqual(len(self.p.facts()), 2)
+        self.assertEqual(len(self.p.objects()), 1)
+        self.assertEqual(self.p.fact(port['id'])['text'], '项目端口8080')
+        self.assertEqual(self.p.db.execute('SELECT COUNT(*) FROM facts WHERE text=?', ('项目端口8080',)).fetchone()[0], 1)
+
+    def test_old_history_cannot_supersede_newer_source(self):
+        o = self.p.add_object('超时')
+        self.p.add_source('new:1:u', 'new', 1, 'user', '2026-11-15T00:00:00Z', '超时已改成60秒')
+        current = self.p.add_fact([o], '超时60秒', evidence=[('new:1:u', '超时已改成60秒')])
+        turns = self.turns(('超时45秒。', '收到。')); turns[0]['at'] = '2026-11-01T00:00:00Z'
+        main = J(memories=[{'title': '超时', 'text': '超时45秒', 'about': ['p%d' % o],
+                           'evidence': ['超时45秒'], 'invalidates': ['rp%d' % current]}])
+        result = self.run_batch(turns, main)
+        self.assertTrue(self.p.fact(current)['active'])
+        older = self.p.db.execute('SELECT * FROM facts WHERE text=?', ('超时45秒',)).fetchone()
+        self.assertFalse(older['active']); self.assertEqual(older['superseded_by'], current)
+        self.assertEqual(result['calls'], 1)
+
+    def test_conflict_prompt_has_original_dates_not_insert_order(self):
+        o = self.p.add_object('开业')
+        self.p.add_source('old:1:u', 'old', 1, 'user', '2026-10-01T00:00:00Z', '开业12月1日')
+        self.p.add_fact([o], '开业12月1日', evidence=[('old:1:u', '开业12月1日')])
+        turns = self.turns(('开业改成12月2日。', '收到。'))
+        main = J(memories=[{'text': '开业12月2日', 'about': ['p%d' % o], 'evidence': ['改成12月2日']}])
+        def check(prompt):
+            self.assertIn('2026-10-01', prompt); self.assertIn('2026-11-14', prompt)
+            self.assertIn('不按入库先后', prompt)
+            return J(replacements=[])
+        self.run_batch(turns, main, check)
+
+    def test_old_history_cannot_withdraw_newer_advice(self):
+        o = self.p.add_object('建议')
+        self.p.add_source('new:1:a', 'new', 1, 'assistant', '2026-11-15T00:00:00Z', '建议周四检查日志')
+        n = self.p.add_fact([o], '建议周四检查日志', kind='suggestion', source_role='assistant',
+                            evidence=[('new:1:a', '建议周四检查日志')])
+        turns = self.turns(('取消旧建议。', '收到。')); turns[0]['at'] = '2026-11-01T00:00:00Z'
+        main = J(advice_updates=[{'ref': 'rp%d' % n, 'effect': 'withdrawn', 'reason': '较早会话的取消请求'}])
+        self.run_batch(turns, main, J())
+        self.assertIsNone(self.p.fact(n)['advice_status'])
+
+    def test_store_operation_is_atomic_and_idempotent(self):
+        o = self.p.add_object('配置')
+        first = self.p.add_fact([o], '阈值10', operation='same-operation')
+        again = self.p.add_fact([o], '阈值10', operation='same-operation')
+        self.assertEqual(first, again); self.assertEqual(len(self.p.facts()), 1)
+
+    def test_failed_batch_resumes_after_threshold_changes(self):
+        from hyperthymesia import writecmd
+        with mock.patch.dict(os.environ, {'HYPERTHYMESIA_HOME': str(self.home)}):
+            st = state(self.home)
+            for i, text in enumerate(['我只喝茶。', '我的猫3岁。'], 1):
+                st.execute('INSERT INTO backlog(session,turn,project,user_text,assistant_text,started_at,completed_at) VALUES(?,?,?,?,?,?,?)',
+                           ('s1', i, '', text, '收到。', '2026-11-14', '2026-11-14'))
+            main = J(objects=[{'key': 'k', 'name': '个人偏好', 'scope': 'personal'}], memories=[
+                {'text': '用户只喝茶', 'about': ['k'], 'evidence': ['我只喝茶']}])
+            def failed(_): raise providers.ProviderError('补漏暂时不可用')
+            providers.FAKE_REPLIES[:] = [main, failed]
+            with mock.patch.object(writecmd, 'BATCH_TOKENS', 99999), self.assertRaises(RuntimeError):
+                writecmd.write_project('')
+            before = self.u.facts()[0]['id']
+            providers.FAKE_REPLIES[:] = [J(memories=[{'text': '用户的猫3岁', 'about': ['k'], 'evidence': ['我的猫3岁']}])]
+            with mock.patch.object(writecmd, 'BATCH_TOKENS', 1):
+                self.assertEqual(writecmd.write_project(''), 2)
+            self.assertEqual(self.u.fact(before)['text'], '用户只喝茶')
+            self.assertEqual(len(self.u.objects()), 1)
+            self.assertEqual(st.execute('SELECT COUNT(*) FROM backlog WHERE written=1').fetchone()[0], 2)
 
 
 if __name__ == '__main__':

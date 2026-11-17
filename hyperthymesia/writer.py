@@ -8,7 +8,8 @@
   5. 缺口补写：用户原话没被任何用户事实引用的轮次，用同一口径再判断一次（新请求，可回 {}）。
   6. 冲突检查：本批新事实与现有事实可能是新旧值并存时，用一个小请求确认并合并。
 两个库（个人 u / 项目 p）在一次调用里一起处理：对象 u7/p7，记录 ru41/rp41。"""
-import difflib, json, re, time
+import difflib, hashlib, json, re, time
+from datetime import datetime, timezone
 from pathlib import Path
 
 from . import providers
@@ -31,16 +32,31 @@ GAP_NOTE = ('（补漏）下面几轮在本批整理时，用户本人的事实�
 
 # ---------------------------------------------------------------- JSON 解析（本地修复常见格式错误）
 def _fix(t, err):
-    pos = err.pos; msg = err.msg
-    m = re.search(r',\s*"\s*(?=[}\]])', t)
-    if m: return t[:m.start()] + t[m.end():]
-    m = re.search(r',\s*(?=[}\]])', t)
-    if m: return t[:m.start()] + t[m.end():]
-    if msg.startswith("Expecting ',' delimiter"):
-        q = t.rfind('"', 0, pos)
-        if q > 0 and t[q - 1] != '\\' and not re.match(r'\s*[,:}\]]', t[q + 1:]): return t[:q] + '\\"' + t[q + 1:]
-        return t[:pos] + ',' + t[pos:]
-    return None
+    # 只在字符串外改结构符号；不猜引号、不改写任何正文或字段值。
+    outside = {}; stack = []; quoted = False; escaped = False
+    for i, c in enumerate(t):
+        if quoted:
+            if escaped: escaped = False
+            elif c == '\\': escaped = True
+            elif c == '"': quoted = False
+            continue
+        outside[i] = tuple(stack)
+        if c == '"': quoted = True
+        elif c in '[{': stack.append(c)
+        elif c in ']}' and stack: stack.pop()
+    trailing = [i for i in outside if t[i] == ',' and re.match(r'\s*[}\]]', t[i + 1:])]
+    if trailing: return ''.join(c for i, c in enumerate(t) if i not in set(trailing))
+    candidates = set()
+    if err.msg.startswith("Expecting ',' delimiter") and err.pos in outside:
+        candidates.add(t[:err.pos] + ',' + t[err.pos:])
+    for i, parents in outside.items():
+        if t[i] == ',' and parents[-2:] == ('{', '[') and re.match(r'\s*"(?:[^"\\]|\\.)*"\s*:', t[i + 1:]):
+            candidates.add(t[:i] + ']' + t[i:])
+    valid = []
+    for candidate in candidates:
+        try: json.loads(candidate); valid.append(candidate)
+        except ValueError: pass
+    return valid[0] if len(valid) == 1 else None
 
 
 def parse(text):
@@ -81,6 +97,17 @@ def _lev(a, b):
 def _norm(s): return re.sub(r'\s+', '', s or '')
 
 
+def _date(value):
+    try:
+        d = datetime.fromisoformat(str(value).replace('Z', '+00:00'))
+        return d.replace(tzinfo=timezone.utc).timestamp() if d.tzinfo is None else d.timestamp()
+    except (ValueError, TypeError): return None
+
+
+class PendingEvidence(providers.ProviderError):
+    """条目未能绑定来源，保存待续接，不能冒充成功或静默弃记。"""
+
+
 class Batch:
     """一批写入。stores: {'u': Store, 'p': Store 或 None}；turns: [{session, turn, user, assistant, changes, at}]。"""
 
@@ -95,13 +122,49 @@ class Batch:
         self.new_facts = []     # [(scope, fact id)]
         self.answers = []
         self.keys = {}; self.made = {}   # 本批新对象：模型给的临时 key -> 定义 / 已建对象 (scope, id)，跨多次 apply 保留
+        identity = [str(st.path) for st in self.stores.values()], self.turns
+        self.batch_id = hashlib.sha256(json.dumps(identity, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+        self.phase = 'main'; self.slots = {}; self.progress = {'done': [], 'responses': {}}
+        if self.state is not None:
+            row = self.state.execute('SELECT payload FROM writer_progress WHERE batch=?', (self.batch_id,)).fetchone()
+            if row: self.progress = json.loads(row[0])
+        base = self.progress.get('base', {})
+        for key in ('seen', 'keys', 'made', 'new_facts'):
+            if key in base: setattr(self, key, base[key])
+        self.new_facts = [tuple(x) for x in self.new_facts]
+
+    def checkpoint(self, base=False):
+        if base:
+            self.progress['base'] = {key: getattr(self, key) for key in ('seen', 'keys', 'made', 'new_facts')}
+            # 冻结阶段起点；后续局部落库即使中断，重放仍使用原来的引用关系。
+            self.progress['base'] = json.loads(json.dumps(self.progress['base']))
+        self.progress['turn_keys'] = [[t['session'], t['turn']] for t in self.turns]
+        if self.state is not None:
+            self.state.execute('INSERT OR REPLACE INTO writer_progress VALUES(?,?,?,?)',
+                               (self.batch_id, self.project, json.dumps(self.progress, ensure_ascii=False), time.time()))
+
+    def operation(self, value):
+        return self.batch_id + ':' + self.phase + ':' + hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+
+    def dates(self, sc, n):
+        return [r[0] for r in self.stores[sc].db.execute(
+            'SELECT DISTINCT s.at FROM evidence e JOIN sources s ON s.id=e.source WHERE e.fact=?', (n,)) if r[0]]
+
+    def evidence_date(self, sc, evidence):
+        values = [_date(r[0]) for sid, _ in evidence for r in self.stores[sc].db.execute('SELECT at FROM sources WHERE id=?', (sid,))]
+        return max((v for v in values if v is not None), default=None)
+
+    def date_label(self, sc, n):
+        dates = sorted(self.dates(sc, n), key=lambda x: _date(x) or 0)
+        return '—'.join(dict.fromkeys([dates[0], dates[-1]])) if dates else '未知'
 
     # ------------------------------------------------------------ 材料、索引、旧记录
     def material(self, only=None):
         out = []
         for t in self.turns:
             if only and t['n'] not in only: continue
-            out += ['[第%d轮 user]' % t['n'], t['user'], '', '[第%d轮 assistant]' % t['n'], t['assistant'], '']
+            out += ['[第%d轮 user 来源时间%s]' % (t['n'], t.get('at') or '未知'), t['user'], '',
+                    '[第%d轮 assistant 来源时间%s]' % (t['n'], t.get('at') or '未知'), t['assistant'], '']
         return '\n'.join(out)
 
     def index_text(self):
@@ -153,7 +216,9 @@ class Batch:
         out = []
         for (sc, o), rs in by.items():
             out.append('【%s %s】' % (self.stores[sc].oid(o), names[sc].get(o, '')))
-            for ref, r in rs: out.append('%s %s%s' % (ref, '〔只读〕' if r['readonly'] else '', r['text']))
+            for ref, r in rs:
+                out.append('%s %s%s%s' % (ref, ('〔只读〕' if r['readonly'] else '') + ('〔依据已变〕' if r.get('advice') else ''),
+                           '〔来源时间%s〕' % self.date_label(r['scope'], r['id']), r['text']))
         return '\n'.join(out) or '（无）'
 
     # ------------------------------------------------------------ 模型调用与写入会话复用
@@ -170,16 +235,42 @@ class Batch:
         self.state.execute('INSERT OR REPLACE INTO writer_sessions VALUES(?,?,?,?)', (k, providers.name(), sid, last_input))
 
     def ask(self, prompt, sid=None):
+        index = self.slots.get(self.phase, 0); self.slots[self.phase] = index + 1
+        slot = self.phase + ':' + str(index)
+        if slot in self.progress['responses']:
+            cached = self.progress['responses'][slot]
+            from types import SimpleNamespace
+            return SimpleNamespace(text=cached['text'], sid=cached['sid'], usage=cached['usage'])
         started = time.monotonic()
         rep = providers.call(self.home, RULES, prompt, sid, self.log)
         self.log.append({'step': 'model_usage', 'seconds': round(time.monotonic() - started, 3), 'usage': dict(rep.usage)})
         self.calls += 1; self.usage.append(rep.usage)
         self.answers.append(rep.text)   # 原始回答，便于排查（不含凭据：材料已脱敏）
+        self.progress['responses'][slot] = {'text': rep.text, 'sid': rep.sid, 'usage': dict(rep.usage)}
+        self.progress.setdefault('attempts', []).append({'slot': slot, 'usage': dict(rep.usage), 'reply': rep.text})
+        self.checkpoint()
         return rep
 
     # ------------------------------------------------------------ 主流程
     def run(self):
         t0 = time.time()
+        if 'main_output' not in self.progress:
+            self.collect_main()
+        self.save_sources()
+        for phase in ('main', 'gap', 'conflict'):
+            if phase in self.progress['done']: continue
+            self.phase = phase; self.slots = {}
+            if phase == 'main': self.apply(self.progress['main_output'], quote_retry=True)
+            elif phase == 'gap': self.gap_fill()
+            else: self.conflict_check()
+            self.progress['done'].append(phase); self.checkpoint(base=True)
+        self.progress['complete'] = True; self.checkpoint()
+        tot = {k: sum(u.get(k, 0) for u in self.usage) for k in ('input_tokens', 'cached_input_tokens', 'output_tokens')}
+        return {'calls': self.calls, 'usage': tot, 'new_facts': len(self.new_facts), 'secs': round(time.time() - t0, 1),
+                'log': self.log, 'answers': self.answers, 'batch': self.batch_id, 'attempts': self.progress.get('attempts', [])}
+
+    def collect_main(self):
+        self.phase = 'extract'; self.slots = {}
         sel = self.preselect()
         recs = [x for sc, objs in sel.items() for x in self._records(sc, objs)]
         shown = {(sc, o) for sc, objs in sel.items() for o in objs}
@@ -189,12 +280,12 @@ class Batch:
         sid = self._session(); fresh_sid = sid
         if sid: prompt = '（新的一批。之前各批都已写入完毕，不要再处理；只处理下面这批材料，对象索引和旧记录以本条消息为准。）\n' + prompt
         out = None; base = None; checked_unseen = False
-        while self.calls < MAX_CALLS:
+        for _ in range(MAX_CALLS):
             rep = self.ask(prompt, sid); sid = rep.sid
             try: got = parse(rep.text)
             except ValueError as exc:
                 self.log.append({'step': 'parse_error', 'error': str(exc)[:200]})
-                prompt = '你上一条回复的JSON无法解析（%s）。请完整重交上一条回复的全部内容，只修正格式，只回复一个JSON对象。' % exc; continue
+                raise providers.ProviderError('回复格式有歧义，原回复已保存，未要求重写正确内容：' + str(exc)) from exc
             validate_submission(got)
             out = merge_delta(base, got) if base is not None else got; base = None
             need = [i for i in out.pop('need_objects', []) or [] if self._obj(i) and self._obj(i) not in shown]
@@ -212,11 +303,7 @@ class Batch:
             break
         if out is None: raise providers.ProviderError('写入未获得可解析结果，未确认完成，原材料保留。')
         self._remember(sid, self.usage[-1].get('input_tokens', 0) if self.usage else 0)
-        self.save_sources()  # preserve provenance even if a later provider operation fails
-        if out: self.apply(out, quote_retry=True)
-        self.gap_fill(); self.conflict_check(); self.save_sources()
-        tot = {k: sum(u.get(k, 0) for u in self.usage) for k in ('input_tokens', 'cached_input_tokens', 'output_tokens')}
-        return {'calls': self.calls, 'usage': tot, 'new_facts': len(self.new_facts), 'secs': round(time.time() - t0, 1), 'log': self.log, 'answers': self.answers}
+        self.progress['main_output'] = out; self.checkpoint(base=True)
 
     # ------------------------------------------------------------ 编号解析
     def _obj(self, i):
@@ -250,7 +337,7 @@ class Batch:
             nq = _norm(str(q).lstrip('+-'))
             if len(nq) < 2: continue
             for sid, role, text in segs:
-                if nq in text: ev.append((sid, str(q).strip())); roles.add(role); break
+                if nq in text: ev.append((sid, str(q).strip())); roles.add(role)
         return ev, roles
 
     # ------------------------------------------------------------ 落库
@@ -264,7 +351,8 @@ class Batch:
             if x in keys:
                 sc, o = keys[x]; st = self.stores[sc]
                 parents = [p for p in (resolve(y) for y in o.get('parents', []) or [] if y != x) if p and p[0] == sc]
-                made[x] = (sc, st.add_object(o.get('name') or x, o.get('purpose', ''), [p[1] for p in parents], o.get('aliases', []) or []))
+                made[x] = (sc, st.add_object(o.get('name') or x, o.get('purpose', ''), [p[1] for p in parents], o.get('aliases', []) or [],
+                                           operation=self.operation(['object', sc, x, o])))
                 self.log.append({'step': 'object_created', 'scope': sc, 'name': o.get('name')}); return made[x]
             return self._obj(x)
         pending = []
@@ -273,24 +361,37 @@ class Batch:
             old = [r for r in (self._ref(x) for x in g.get('refs', []) or []) if r]
             for k, m in enumerate(g.get('memories', []) or []):
                 about = [a for a in (resolve(x) for x in m.get('about', []) or []) if a]
-                if not about: self.log.append({'step': 'dropped_no_about', 'title': m.get('title')}); continue
+                if not about:
+                    raise providers.ProviderError('条目对象无法解析，原提交保留：' + str(m.get('title', '')))
                 sc = about[0][0]; about = [a for a in about if a[0] == sc]
                 ev, roles = self._evidence(m.get('evidence'))
                 if not ev:
-                    pending.append(m); continue
+                    item = dict(m)
+                    item['invalidates'] = list(m.get('invalidates') or []) + (old if k == 0 else [])
+                    pending.append(item); continue
                 kind = 'suggestion' if m.get('kind') == 'suggestion' else 'fact'
                 role = 'mixed' if roles == {'user', 'assistant'} else ('user' if 'user' in roles else 'assistant')
                 inv = [r for r in (self._ref(x) for x in (m.get('invalidates') or [])) if r] + (old if k == 0 else [])
-                sup = []
+                sup = []; newer = []
+                incoming = self.evidence_date(sc, ev)
                 for r in dict.fromkeys(inv):
                     rec = self.seen[r]
+                    if rec['scope'] != sc:
+                        self.log.append({'step': 'cross_scope_ref_dropped', 'ref': r}); continue
+                    if not set(rec['about']) & {a[1] for a in about} and not self._related(sc, rec['object'], [a[1] for a in about]):
+                        self.log.append({'step': 'cross_object_ref_dropped', 'ref': r}); continue
+                    previous = max((_date(x) for x in self.dates(rec['scope'], rec['id']) if _date(x) is not None), default=None)
+                    if incoming is not None and previous is not None and incoming < previous:
+                        if rec['scope'] == sc and not rec['readonly']:
+                            newer.append((previous, rec['id']))
+                        self.log.append({'step': 'older_source', 'ref': r})
+                        continue
                     if rec['readonly']:
                         self.stores[rec['scope']].set_advice_status(rec['id'], 'basis_changed', '被新事实取代：' + m.get('text', '')[:40])
-                    elif rec['scope'] != sc: self.log.append({'step': 'cross_scope_ref_dropped', 'ref': r})
-                    elif not set(rec['about']) & {a[1] for a in about} and not self._related(sc, rec['object'], [a[1] for a in about]):
-                        self.log.append({'step': 'cross_object_ref_dropped', 'ref': r, 'text': m.get('text', '')[:30]})
                     else: sup.append(rec['id'])
-                n = self.stores[sc].add_fact([a[1] for a in about], m.get('text', ''), kind, role, m.get('title', ''), ev, sup)
+                op = self.operation([sc, about, m.get('text', ''), kind, m.get('title', '')])
+                n = self.stores[sc].add_fact([a[1] for a in about], m.get('text', ''), kind, role, m.get('title', ''), ev, sup,
+                                           operation=op, historical_of=max(newer)[1] if newer else None)
                 self.new_facts.append((sc, n))
                 for s in sup: self.seen.pop(self.stores[sc].rid(s), None)
         for mv in out.get('record_moves', []) or []:
@@ -300,20 +401,31 @@ class Batch:
         for a in out.get('advice_updates', []) or []:
             r = self._ref(a.get('ref'))
             if r and self.seen[r]['readonly'] and a.get('effect') in ('basis_changed', 'withdrawn'):
+                rec = self.seen[r]
+                incoming = max((_date(t.get('at')) for t in self.turns if _date(t.get('at')) is not None), default=None)
+                previous = max((_date(x) for x in self.dates(rec['scope'], rec['id']) if _date(x) is not None), default=None)
+                if incoming is not None and previous is not None and incoming < previous:
+                    self.log.append({'step': 'older_advice_update', 'ref': r}); continue
                 self.stores[self.seen[r]['scope']].set_advice_status(self.seen[r]['id'], a['effect'], a.get('reason', ''))
         if pending:
             if quote_retry and self.calls < MAX_CALLS + 2:
-                p = ('以下记忆的原文引用在本批原文中找不到（可能改写、拼接或加了格式符号）。请为每条给出一段逐字摘自原文的引用，按顺序回复{"quotes":["…","…"]}：\n'
-                     + '\n'.join('%d. 《%s》%s 原引用：%s' % (i + 1, m.get('title', ''), m.get('text', '')[:60], '；'.join(map(str, m.get('evidence') or []))[:120]) for i, m in enumerate(pending)))
+                p = ('以下记忆尚未绑定原文，只修引用，不改正文、对象或取代关系。下面附本批完整原文，'
+                     '按原文中的作者选择能支持正文的连续片段；不要从待保存摘要改写引用。'
+                     '按顺序回复{"quotes":[["原文片段"],["原文片段"]]}；无法找到则对应填[]，程序保留待处理，不会假报成功。\n'
+                     + json.dumps([{'title': m.get('title'), 'text': m.get('text'), 'evidence': m.get('evidence')} for m in pending], ensure_ascii=False)
+                     + '\n<conversation_material>\n' + self.material() + '\n</conversation_material>')
                 try:
+                    slot = self.phase + ':' + str(self.slots.get(self.phase, 0))
                     qs = parse(self.ask(p).text).get('quotes', [])
                     for m, q in zip(pending, qs): m['evidence'] = [q] if isinstance(q, str) else q
                     self.log.append({'step': 'ask_quotes', 'entries': len(pending)})
                     return self.apply({'memories': pending}, quote_retry=False)
                 except (ValueError, providers.ProviderError) as exc:
+                    # 下次显式续接只重试这次引用请求，抽取与正确条目不重写。
+                    self.progress['responses'].pop(slot, None); self.checkpoint()
                     self.log.append({'step': 'ask_quotes_failed', 'error': str(exc)[:120]}); raise
-            # 补交一次仍对不上原文：只丢这几条，其余照常保存（设计 23.49）
-            self.log.append({'step': 'dropped_unsourced', 'titles': [m.get('title') for m in pending]})
+            self.log.append({'step': 'pending_unsourced', 'titles': [m.get('title') for m in pending]})
+            raise PendingEvidence('引用仍未匹配，条目与原始回复已保留，整批未确认完成：' + '、'.join(str(m.get('title', '')) for m in pending))
 
     def _related(self, sc, obj, about):
         st = self.stores[sc]; par = {}
@@ -327,11 +439,11 @@ class Batch:
         for st in self.stores.values(): cited |= st.evidence_turns()
         gaps = [t['n'] for t in self.turns if t['user'].strip() and t['su'] not in cited]
         self.log.append({'step': 'gap_check', 'gaps': gaps})
-        if not gaps: return
+        if not gaps and not any(k.startswith('gap:') for k in self.progress['responses']): return
         prompt = (GAP_NOTE + '\n<object_index>\n' + self.index_text() + '\n</object_index>\n<old_records>\n' + self.render(list(self.seen.items())) +
                   '\n</old_records>\n<conversation_material>\n' + self.material(set(gaps)) + '\n</conversation_material>\n只回复JSON。')
         try:
-            got = validate_submission(parse(self.ask(prompt).text)); before = len(self.new_facts); self.apply(got, quote_retry=False)
+            got = validate_submission(parse(self.ask(prompt).text)); before = len(self.new_facts); self.apply(got, quote_retry=True)
             self.log.append({'step': 'gap_fill', 'added': len(self.new_facts) - before})
         except (ValueError, providers.ProviderError) as exc:
             self.log.append({'step': 'gap_fill_failed', 'error': str(exc)[:120]}); raise
@@ -361,7 +473,10 @@ class Batch:
         return groups[:CONFLICT_CAP]
 
     def conflict_check(self):
-        groups = self.conflict_candidates()
+        groups = self.progress.get('conflict_groups')
+        if groups is None:
+            groups = self.conflict_candidates()
+            self.progress['conflict_groups'] = groups; self.checkpoint()
         if not groups: return
         refs = {}
         lines = []
@@ -369,12 +484,15 @@ class Batch:
             st = self.stores[sc]
             for x in (f, g):
                 r = st.rid(x['id']); refs[r] = (sc, x)
-                self.seen.setdefault(r, {'scope': sc, 'id': x['id'], 'object': x['object'], 'about': [x['object']],
+                self.seen.setdefault(r, {'scope': sc, 'id': x['id'], 'object': x['object'], 'about': x.get('about', [x['object']]),
                                          'readonly': x['kind'] == 'suggestion' and x['source_role'] == 'assistant', 'text': x['text']})
-            lines.append('组%d：\n  %s [%s] %s\n  %s [%s] %s' % (k, st.rid(f['id']), st.oid(f['object']), f['text'], st.rid(g['id']), st.oid(g['object']), g['text']))
+            lines.append('组%d：\n  %s [%s]〔来源时间%s〕%s\n  %s [%s]〔来源时间%s〕%s' %
+                         (k, st.rid(f['id']), st.oid(f['object']), self.date_label(sc, f['id']), f['text'],
+                          st.rid(g['id']), st.oid(g['object']), self.date_label(sc, g['id']), g['text']))
         prompt = ('写入后检查：以下每组是同一对象或内容相近的现行记录（每行：ref [所属对象ID] 正文）。判断其中一条成立后，另一条是否不再成立：同一属性被改了值，'
                   '或措辞不同但被否定、取代、终止（不再…、改为…、调走、离职、搬走、停用、取消），或两条重复。属于不同对象的同类属性（如两家门店各自的价格、两个人各自的职务）是两件不同的事，不要合并。'
-                  '每条记录都已是写入时的当前状态：合并只在两条现有正文之间取最新值或合并信息，不再根据增量重新计算数量。'
+                  '历史导入可能晚于事实发生：按原始来源时间判断新旧，不按入库先后；旧决定不得覆盖后来明确更正的决定。'
+                  '一次性执行指令不代表长期规则；已完成/已撤回状态须保留。合并只在现有正文之间取有依据的值，不根据增量重新计算。'
                   '若是，用replacements引用该组两条ref，写一条合并后的最新正文（kind照常标注，evidence可省略）；若确实是两件不同的事，不要列出。只回复{"replacements":[…]}，没有就回复{"replacements":[]}。\n'
                   + '\n'.join(lines))
         try:
@@ -395,7 +513,8 @@ class Batch:
             roles = {x['source_role'] for x in writable}
             role = 'mixed' if len(roles) > 1 or 'mixed' in roles else roles.pop()
             n = st.add_fact(sorted({base['object']} | {x['object'] for x in writable}), m.get('text', base['text']),
-                            'suggestion' if m.get('kind') == 'suggestion' else 'fact', role, m.get('title', base['title']), ev, [x['id'] for x in writable])
+                            'suggestion' if m.get('kind') == 'suggestion' else 'fact', role, m.get('title', base['title']), ev, [x['id'] for x in writable],
+                            operation=self.operation(['conflict', sc, sorted(x['id'] for x in writable), m]))
             self.new_facts.append((sc, n)); merged += 1
         self.log.append({'step': 'conflict_check', 'groups': len(groups), 'merged': merged})
 

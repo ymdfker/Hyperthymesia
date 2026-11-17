@@ -6,14 +6,14 @@
 代码里定下的约定，新开会话时 agent 依然记得，不用再交代一遍。
 
 - 记忆库存在你电脑上（`~/.hyperthymesia/`）；后台整理时，相关材料会发送给宿主使用的模型，密码、密钥先做遮盖。
-- 后台自动整理，用你 agent 自己最便宜且通过能力检查的模型和额度；额外花费取决于对话和宿主，尚无一周真实使用数据，不承诺固定比例。
+- 后台自动整理，用你 agent 自己最便宜且通过能力检查的模型和额度；额外花费取决于对话和宿主，可通过日志查看实际用量。
 - 个人的事所有项目通用；每个项目的约定只在该项目里可见。
 
 ## 接入步骤
 
 找到你用的 agent，只按那一节一步步做。用多个 agent 就每一节各做一遍。
 
-当前发行版为 **v0.2.6**，包含Windows桌面接入、CLI参数传递、BOM、进程锁、未完成轮次恢复和写入失败处理修复，以及v0.2.5的修复。下面的一键命令从GitHub最新发行版安装。macOS命令行已做兼容测试；IDE／桌面完整验收和Windows真实安装链路尚未全部完成。
+以下一键命令安装最新正式版本；升级后请完全退出并重新打开你的agent。
 
 - [Claude Code](#claude-code)
 - [Codex](#codex)
@@ -21,7 +21,7 @@
 - [Qoder](#qoder)
 - [DeepSeek Harness（dsh）](#deepseek-harnessdsh)
 
-不需要安装 Python 或其他环境。
+使用打包程序不需要安装Python；宿主所需的CLI或Node.js按下面对应步骤配置。
 
 ### Claude Code
 
@@ -94,11 +94,7 @@ hyperthymesia doctor --agent codex
 
 ### WorkBuddy
 
-**桌面版已知局限（本机5.3.14实测）**：退出时结束钩子不能可靠送达，未达到批量阈值的尾部可能要等下次进入会话、触发启动钩子后才自动补写。仅打开应用停在首页不保证触发；补写完成前，新会话可能答不出尾部信息。已入库记忆的读取不受此问题直接影响。暂不增加补丁，详见[兼容记录](docs/desktop-compat.md)。
-
-**桌面验证范围**：后台整理曾被自身钩子记录并引发递归；v0.2.5已加入统一内部任务隔离。之后独立桌面短测的核心事实写入和跨会话召回7/7正确，但存在后台耗时及模型选择偏差，整体仅部分通过。新的选模和建议保存规则已完成无模型检查，尚未重新做付费端到端质量验收；退出尾写的宿主局限见上文。详见[兼容报告](docs/desktop-compat.md)。
-
-**发布状态：v0.2.6已包含桌面配置入口及本轮Windows修复，下列一键安装或升级命令可安装该版本。**
+**WorkBuddy 5.3.14退出注意事项**：退出时结束钩子不能可靠送达，未达到批量阈值的尾部可能要等下次进入会话、触发启动钩子后才自动补写。仅打开应用停在首页不保证触发；补写完成前，新会话可能答不出尾部信息。已入库记忆的读取不受此问题直接影响。停用接入请执行卸载命令并重启宿主。
 
 **1. 安装并接入**
 
@@ -214,10 +210,9 @@ hyperthymesia doctor --agent dsh
 
 “写入提供方”应显示 `dsh`。这只确认整理提供方；还需要确认 MCP 已连接、钩子实际触发。完整检查步骤见[兼容核查清单](docs/desktop-compat.md)。
 
-### Windows桌面接入修复（v0.2.6）
+### Windows配置与排错
 
 - Qoder用户级MCP与钩子均使用`~/.qoder/settings.json`；升级接入会先备份，只迁移本服务在旧`mcp.json`中的条目。
-- Windows通过Node直接启动实际CLI脚本，避免`.cmd`截断多行规则；后台Qoder调用移除SDK启动模式标记，保留认证位置和其他环境。不会强制把所有新版Qoder降级。
 - WorkBuddy支持发现注册安装位置和lite构建。非标准位置仍无法发现时，可在启动宿主前设置`HYPERTHYMESIA_CODEBUDDY_CLI`为实际`cli/bin/codebuddy`或JavaScript入口；它不是登录凭据。
 - `hyperthymesia doctor --agent workbuddy --check-cli`可无模型检查启动；`doctor --agent qoder --check-cli`同理。启动通过不代表模型鉴权通过；若lite构建没有独立登录入口且桌面认证不能复用，需要明确配置自己的兼容API，不会自动切换账号或收费渠道。
 - 数据目录可用`HYPERTHYMESIA_HOME`指定，例如PowerShell中`$env:HYPERTHYMESIA_HOME="F:\Hyperthymesia-data"`。它不改变exe解包目录；系统盘满时还需将标准`TEMP`和`TMP`设为可写、有空间的目录，再重启宿主。搬迁旧库前请退出宿主并备份。
@@ -254,6 +249,10 @@ base_url = "https://api.deepseek.com/v1"
 api_key_env = "DEEPSEEK_API_KEY"         # 只写环境变量名，key 本身放在环境变量里，本工具不保存
 ```
 
+**后台模型选择**：自动选择分别检查质量、速度和可获得的用量；宿主没有上报token时标为“未知”，不会仅因此拒绝模型，也不能把未知用量当成已证实低开销。准入题允许把同一方案的两个步骤分条保存，原始回复和判定原因脱敏记录在`logs/models.log`。`doctor --check-cli`只运行版本检查，不调用模型或刷新准入缓存。
+
+如果你已确认某个模型在本机可用，可在`config.toml`显式设置`[writer]`下的`model = "你的宿主实际支持的模型ID"`。这会跳过自动准入，**不代表质量已验收**，也不会自动改用别家宿主或付费API。显式指定只控制模型，提供方仍遵循宿主或你自己的配置。自动选择失败会保留积压并给出日志和配置路径。
+
 **升级**：重新执行你那一节第 1 步的命令即可（会覆盖程序并重新接入，记忆保留）。
 
 **卸载**：`hyperthymesia uninstall 你的agent`（移除本工具配置，保留其他条目；备份用于需要时手动恢复）。删除 `~/.hyperthymesia/` 即清空全部记忆。
@@ -269,51 +268,17 @@ api_key_env = "DEEPSEEK_API_KEY"         # 只写环境变量名，key 本身放
 | `write` | 立即整理积压对话（平时后台自动） |
 | `import --list` / `import --agent X --session 编号` | 导入接入前的会话 |
 
+### 写入失败后继续
+
+引用修正请求会附上原始材料，只修引用。仍找不到来源的条目保留为待处理，不会被当作已完成。写入进度保存在`state.db`，已保存的对象与事实不会因重复执行同一步而重复插入；下次执行`write`沿用原批次并从未完成阶段续接，不必重导全部历史。只有阶段全部完成才确认该批处理完成，完成计数不代表事实完整率。
+
+历史事实按来源时间判断新旧，而不是按导入先后。来源时间不清楚、引用含义不足、哪些内容值得保存，仍需要模型判断，程序不能保证语义全对。格式有歧义时保留原回复并报错，不要求模型重写正确内容；请保留`state.db`和`logs/writer.log`用于排查，不要清库重导。日志包含已脱敏的模型回复。排查后可执行`hyperthymesia write`继续处理待完成步骤。
+
 ## 它是怎么工作的
 
 每轮开始，钩子把相关记忆注入给 agent（记忆多时只注入目录，agent 通过 MCP 工具按需读取）；每轮结束，记下你的原话、
 agent 的最终回复和本轮代码改动；积压够多或会话结束时，后台用该 agent 最便宜的模型整理进 `~/.hyperthymesia/`，
 旧值被新值取代时自动失效。代码改动通过独立的影子仓库记录，不碰你的 git 历史；`.env`、私钥等凭据文件不读取。
-
-## 开发
-
-- 只用 Python 标准库；测试：`python3 -m unittest discover -s tests -v`
-- 推送到 main 后，GitHub Actions 在各系统上测试、用 PyInstaller 打出单文件并冒烟测试；推送 `v*` 标签时自动发布到 Releases。
-
-
-## IDE 与桌面版验证
-
-各界面的配置路径、接入缺口、简短操作清单及项目覆盖钩子的行为，见 [IDE／桌面兼容核查](docs/desktop-compat.md)。CLI 已通过不等于桌面版已通过；WorkBuddy 桌面配置入口与内置 CLI 默认入口不同，源码已分开适配，桌面短测核心事实写入与召回已通过，耗时、模型偏差和退出尾写局限见兼容记录；不代表全部GUI分支已验收。
-
-
-## 当前验证结果与待办
-
-配置文件存在、doctor 显示提供方、MCP 连通，分别只证明对应环节；都不能单独证明记忆完整接入。详细步骤、证据和版本见[兼容核查](docs/desktop-compat.md)。
-
-### 项目配置覆盖／禁用钩子（S9）
-
-以下检查未提交模型问答任务，不消耗模型额度。
-
-| 宿主 | 已验证 | 仍未验证或发现的问题 |
-| --- | --- | --- |
-| Claude Code CLI | 用户与项目启动钩子合并；项目空表不清除用户钩子；项目禁用能阻止启动钩子 | 不能据此覆盖所有 GUI 与生命周期事件 |
-| Qoder CLI | 合并通过；两种禁用方式均在正常状态栏下不触发启动钩子，重新开启恢复 | 不等于 IDE 与所有事件已完整验收 |
-| WorkBuddy 内置 CLI（桌面配置目录） | 合并、MCP 握手及轮次记录通过；已定位关闭失效的根因 | **本机 5.3.14 内置执行器未检查 disableAllHooks**；七类事件派发代码回放均忽略此键，桌面两轮写入及新会话召回核心事实7/7；快捷验收仅部分通过（详见兼容记录） |
-| Codex | 无模型固定 HTTP 响应验证开→关→再开；提交／停止实际记录为 1→0→1 | 不代表全部事件和 GUI 已通过；新钩子仍须审核信任 |
-| dsh | 独立 profile 的合成配置确认显式 --patch 能禁用条目；项目目录单放补丁不会自动加载 | 不等于全部运行事件测试通过 |
-
-### 尚未完成
-
-- **一周真实使用**：正常工作中观察记错、漏记、多记及注入量，每隔两三天检查记忆库和整理日志。目前没有长期实用结论。
-- **GUI 完整验收**：Claude VS Code／JetBrains／Desktop Code、Codex IDE／App、Qoder IDE／JetBrains、CodeBuddy IDE、WorkBuddy 桌面及 dsh TUI；不能沿用 CLI 或 dsh web 的通过结论。每种形态的简短操作见兼容清单。
-- **S9 环境缺项**：独立 CodeBuddy IDE 本机未安装，仍无实机结果。Qoder 禁用、Codex 提交／停止已补验。WorkBuddy 开关失效已归为宿主已知问题，不列为记忆服务待修复项，不增加补丁；它影响用户停用钩子，不妨碍正常开启时的记忆流程，也不能代替桌面完整读写验收。详细证据见[兼容报告 §6](docs/desktop-compat.md#6-s9-剩余项收尾与-workbuddy-根因2026-11-15最新结果)。
-- **Windows桌面端到端**：Windows CI覆盖参数传递、BOM、进程锁、记录恢复、打包和无模型一键安装；仍未代替用户实际宿主登录、MCP可见性和完整问答验收。
-- **后续发布验收**：v0.2.6已发布本轮Windows修复；构建、打包与无模型安装检查不等于真实桌面完整验收，仍需按上面的范围继续验证。
-
-可选后续：v0.2.4 全量回归、Gitee 附件匿名下载验证。无用的本地／远端 v0.2.0 标签已删除。任何需要正常模型回合的测试，执行前先报额度预估。
-
-
----
 
 ## English user guide
 
@@ -323,7 +288,7 @@ Hyperthymesia gives AI agents long-term memory across chats. It captures facts, 
 - Background writing uses your agent's own model access and quota. Automatic selection considers available acceptance results, speed, token usage and price. Extra usage varies; there is no guaranteed overhead percentage.
 - Personal memories are shared across projects; project memories belong to their project.
 
-Source repositories: [GitHub](https://github.com/ymdfker/Hyperthymesia) · [AtomGit](https://atomgit.com/ynndfker/Hyperthymesia). The installation commands below download published **GitHub Release** assets. Synchronizing source code to AtomGit does not create an AtomGit binary release.
+Source repositories: [GitHub](https://github.com/ymdfker/Hyperthymesia) · [AtomGit](https://atomgit.com/ynndfker/Hyperthymesia). The installation commands below download published **GitHub Release** assets. The commands always install the latest published version.
 
 ### 1. Install and connect your agent
 
@@ -353,13 +318,11 @@ irm https://github.com/ymdfker/Hyperthymesia/releases/latest/download/install.ps
 
 No Python installation is required for the packaged executable. Wait for the installer to report completion. Repeat for each agent you use.
 
-**Current release: v0.2.6.** It includes Windows desktop configuration and CLI transport fixes, BOM handling, native process locks, interrupted-turn recovery and write-failure handling, plus the v0.2.5 fixes. The commands above install the latest GitHub Release. Users of v0.2.5 or earlier should rerun installation and restart their agent.
-
 ### 2. Complete your agent's setup
 
 - **Claude Code:** fully quit all Claude Code windows or terminal sessions, then reopen it.
 - **Codex:** fully quit and reopen Codex. Enter `/hooks` and approve/trust the Hyperthymesia hooks. Without approval, the hooks will not run.
-- **WorkBuddy:** fully quit and reopen the app. In its MCP settings, ensure `hyperthymesia` is enabled and connected. With the source fix, desktop settings use `~/.workbuddy/settings.json` and `~/.workbuddy/mcp.json`; existing files are backed up and CodeBuddy CLI settings are preserved. Use `hyperthymesia install codebuddy` for the separate CLI.
+- **WorkBuddy:** fully quit and reopen the app. In its MCP settings, ensure `hyperthymesia` is enabled and connected. Desktop settings use `~/.workbuddy/settings.json` and `~/.workbuddy/mcp.json`; existing files are backed up and CodeBuddy CLI settings are preserved. Use `hyperthymesia install codebuddy` for the separate CLI.
 - **Qoder:** the installer sets up the official `qodercli` used for background writing. Run `qodercli login`, complete browser authorization, then fully restart Qoder. If the installer requires npm, install Node.js LTS from [nodejs.org](https://nodejs.org/) and rerun installation.
 - **DeepSeek Harness:** use the DeepSeek API key already configured in dsh. If needed, run `dsh web`, open Settings → Models, configure DeepSeek and save. Obtain a key from [DeepSeek Platform](https://platform.deepseek.com/). Restart dsh by stopping `dsh web` with Ctrl+C and launching it again. Hyperthymesia does not require you to copy the key into its own configuration.
 
@@ -383,13 +346,11 @@ Chat and work normally. Hooks record completed turns and code changes; backgroun
 hyperthymesia context /path/to/project
 ```
 
-### WorkBuddy desktop limitations
+### WorkBuddy desktop usage notes
 
-On the tested WorkBuddy 5.3.14, normal desktop quit did not reliably deliver `SessionEnd`, even after the runtime was ready and `SessionStart` had fired. Material below the batch threshold may remain pending until the next session-start event triggers background writing. Opening the home screen alone does not guarantee that event; entering an existing chat was verified. A question asked before writing finishes may miss the pending information. Already stored memories remain readable. No fixed waiting time is guaranteed.
+WorkBuddy 5.3.14 may not deliver the session-end event reliably on quit. Conversation material below the batch threshold may remain pending until you enter a chat again and session-start triggers background writing. Opening the home screen alone is insufficient; a question asked before writing finishes may miss that pending material. Already stored memories remain readable.
 
-The tested version also ignores the `disableAllHooks` setting. This is recorded as a host limitation; Hyperthymesia does not override it with another switch. To disconnect, remove Hyperthymesia's integration using the uninstall command and restart the host.
-
-An earlier desktop run exposed recursive recording of background tasks. Source code now marks internal calls and skips their hooks. A subsequent isolated desktop test saved and recalled all seven target facts correctly, but had model-selection and latency deviations; this is a partial acceptance result, not full desktop certification. The subsequent model-selection and suggestion-policy changes have local checks, not a new paid end-to-end acceptance.
+That version also ignores `disableAllHooks`. To disconnect Hyperthymesia, use its uninstall command and restart WorkBuddy.
 
 ### Optional operations
 
@@ -426,7 +387,7 @@ Put the actual key in the named environment variable, not in this file.
 
 **Uninstall:** run `hyperthymesia uninstall claude`, substituting your agent's identifier. It removes Hyperthymesia's integration entries and preserves other settings. Memories remain on disk; deleting `~/.hyperthymesia/` permanently removes them.
 
-### Windows desktop fixes (v0.2.6)
+### Windows configuration and troubleshooting
 
 Qoder's user MCP configuration now shares `~/.qoder/settings.json` with hooks. Integration backs up files and migrates only Hyperthymesia's obsolete MCP entry. Windows CLI launches use the actual Node/JavaScript entrypoint, preserving multiline arguments; inherited Qoder SDK transport markers are removed without deleting authentication locations. Newer CLI versions are not automatically downgraded.
 
@@ -439,7 +400,6 @@ Use `HYPERTHYMESIA_HOME` for the memory directory. Executable extraction still u
 - **Command not found:** reopen Terminal/PowerShell. If necessary, use `~/.local/bin/hyperthymesia` on macOS/Linux or `%USERPROFILE%\.hyperthymesia\bin\hyperthymesia.exe` on Windows (the latter is a Command Prompt path; in PowerShell use `$env:USERPROFILE`).
 - **macOS blocks the executable:** open System Settings → Privacy & Security and choose Open Anyway if offered.
 - **New information is missing:** inspect the capture/write logs and allow background writing to finish; a connected MCP server alone does not prove that hooks captured or saved the conversation.
-- **IDE, desktop and Windows support:** CLI acceptance does not establish equivalent behavior in every GUI. Several GUI variants, actual Windows desktop authentication/full conversations and a full week of everyday use remain unverified. Windows CI checks packaging and installation without a live model. See [compatibility notes](docs/desktop-compat.md) for scope and known issues.
 
 ### Command reference
 
@@ -452,4 +412,12 @@ Use `HYPERTHYMESIA_HOME` for the memory directory. Executable extraction still u
 | `write` | Manually process pending completed turns; normally automatic |
 | `import --list` / `import --agent AGENT --session ID` | Import earlier chats |
 
-For development, the implementation uses Python's standard library. Run `python3 -m unittest discover -s tests -v`. GitHub Actions tests and packages pushes to `main`; `v*` tags additionally publish GitHub Releases.
+### Resuming failed writes
+
+Keep `state.db` and `logs/writer.log` when a write fails. After fixing the reported configuration or connection problem, run `hyperthymesia write` to resume the unfinished stage. Correct objects and facts are retained; the whole chat need not be imported again. An entry with unresolved source references remains pending. Processing completion does not certify that every useful fact was extracted correctly; inspect the saved context and correct mistakes in normal conversation.
+
+### Writer model selection
+
+Automatic selection checks quality, latency and available token statistics. Missing telemetry is marked unknown; it does not by itself reject a model or prove low cost. Redacted probe replies and reasons are in `logs/models.log`. `doctor --check-cli` checks the CLI version without model requests or cache refresh.
+
+To select a model yourself, set `[writer] model = "YOUR_SUPPORTED_MODEL_ID"` in `config.toml`. Explicit selection bypasses automatic screening; it does not certify quality or change the provider. No automatic switch to another host or paid API is performed. Automatic CLI discovery skips unusable wrappers and continues searching; supported npm wrappers resolve to their actual JavaScript entrypoint.

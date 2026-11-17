@@ -59,15 +59,34 @@ def _codebuddy(path):
 
 
 def _codex(path):
-    turns = []; cwd = None; cur = None
+    turns = []; cwd = None; cur = None; keyed = {}; origins = {}; current_id = None
+    def user(at, text, tid=None, origin='event'):
+        nonlocal cur
+        if tid and tid in keyed:
+            cur = keyed[tid]
+            mirrored = origins.get(tid) != origin and text == cur[1]
+            if not mirrored: cur[1] += '\n\n' + text
+        else:
+            cur = [at, text, '']; turns.append(cur)
+            if tid: keyed[tid] = cur
+        if tid: origins[tid] = origin
     for e in _rows(path):
         p = e.get('payload') or {}
         if e.get('type') == 'session_meta': cwd = p.get('cwd')
         if e.get('type') == 'turn_context': cwd = cwd or p.get('cwd')
+        if e.get('type') == 'event_msg' and p.get('type') == 'task_started': current_id = p.get('turn_id')
         if e.get('type') == 'event_msg' and p.get('type') == 'user_message' and p.get('message', '').strip():
-            cur = [e.get('timestamp', ''), p['message'].strip(), '']; turns.append(cur)
-        elif e.get('type') == 'event_msg' and p.get('type') == 'task_complete' and cur is not None and p.get('last_agent_message'):
-            cur[2] = p['last_agent_message']
+            user(e.get('timestamp', ''), p['message'].strip(), p.get('turn_id') or current_id)
+        elif e.get('type') == 'response_item' and p.get('type') == 'message' and p.get('role') == 'user':
+            meta = p.get('internal_chat_message_metadata_passthrough') or {}
+            kinds = meta.get('content_item_kinds', [])
+            if kinds and not any(k.startswith('user.') for k in kinds): continue
+            t = _text(p.get('content')).strip()
+            if t and not t.startswith(('<environment_context>', '<external_codex_apps_')):
+                user(e.get('timestamp', ''), t, meta.get('turn_id') or current_id, 'response')
+        elif e.get('type') == 'event_msg' and p.get('type') == 'task_complete' and p.get('last_agent_message'):
+            target = keyed.get(p.get('turn_id')) or (cur if not p.get('turn_id') else None)
+            if target is not None: target[2] = p['last_agent_message']
     return turns, cwd
 
 
@@ -124,7 +143,9 @@ def import_sessions(agent, picked, write=True):
     if write:
         from . import writecmd
         os.environ['HYPERTHYMESIA_HOST_AGENT'] = host
-        for p in projects: writecmd.write_project(p)
+        for p in sorted(projects):
+            if writecmd.write_project(p) is None:
+                raise RuntimeError('会话已入队，已有后台写入进程；尚不能报告导入完成。')
     return done
 
 
@@ -153,5 +174,5 @@ def run(argv):
         picked = [s for s in ss if s['id'] in ids or any(s['id'].startswith(i) for i in ids)]
         if not picked: print('没有找到这些会话：%s（用 --list 查看会话编号）' % ' '.join(ids)); return 1
     res = import_sessions(agent, picked, write='--no-write' not in argv)
-    print('已导入 %d 个会话，共 %d 轮，并已写入记忆。' % (len(res), sum(res.values())))
+    print('已导入 %d 个会话，共 %d 轮，%s。' % (len(res), sum(res.values()), '仅入队，尚未整理' if '--no-write' in argv else '整理流程已完成（不等于事实完整率已验证）'))
     return 0

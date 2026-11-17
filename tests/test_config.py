@@ -99,6 +99,68 @@ class ConfigTest(unittest.TestCase):
         with mock.patch.dict(os.environ, {'WORKBUDDY_CONFIG_DIR': str(directory)}), mock.patch('hyperthymesia.models.explain', side_effect=explain), mock.patch('sys.stdout', new_callable=io.StringIO):
             self.assertEqual(_doctor(['--agent', 'workbuddy']), 0)
 
+    def test_unknown_usage_does_not_fail_quality_passed_model(self):
+        from hyperthymesia import models
+        row = {'quality_pass': True, 'seconds': 19.984, 'input_tokens': 0, 'output_tokens': 0, 'cost': .0095}
+        self.assertTrue(models._acceptable(row))
+        self.assertIn('未知', models._screen(row)[2][0])
+        self.assertFalse(models._acceptable(dict(row, quality_pass=False)))
+        self.assertFalse(models._acceptable(dict(row, input_tokens=10, output_tokens=100)))
+        self.assertFalse(models._acceptable(dict(row, seconds=121)))
+
+    def test_probe_accepts_split_suggestions_and_equivalent_fixed_answers(self):
+        from hyperthymesia import models
+        got = {'facts': {'timeout': '60 s', 'condition': '只在工作日开启', 'reviewer': 'Priya', 'release': '每星期四发布'},
+               'suggestions': ['失败先保留现场', '然后检查日志']}
+        self.assertEqual(models._probe_quality(got), (True, []))
+        got['suggestions'].append('可以帮忙写通知')
+        self.assertFalse(models._probe_quality(got)[0])
+        got['suggestions'].pop(); got['facts']['timeout'] = '45秒'
+        self.assertFalse(models._probe_quality(got)[0])
+
+    def test_probe_records_redacted_reply_and_unknown_usage(self):
+        from hyperthymesia import models
+        from types import SimpleNamespace
+        import json
+        secret = 'sk-proj-' + 'A' * 30
+        text = json.dumps({'facts': {'timeout': '60秒', 'condition': '仅工作日启用', 'reviewer': 'Priya', 'release': '每周四发布'},
+                           'suggestions': ['先保留现场', '再检查日志'], 'debug': secret}, ensure_ascii=False)
+        reply = SimpleNamespace(text=text, usage={'input_tokens': 0, 'output_tokens': 0, 'cost': .0123})
+        with mock.patch.object(providers, 'call', return_value=reply):
+            row = models._probe('qoder', 'example-model')
+        self.assertTrue(row['ok']); self.assertEqual(row['usage_status'], 'unknown')
+        self.assertEqual(row['cost'], .0123)
+        log = (self.home / 'logs/models.log').read_text(encoding='utf-8')
+        self.assertNotIn(secret, log); self.assertIn('example-model', log)
+        self.assertIn('reply', json.loads(log))
+
+    def test_old_quality_pass_with_unknown_usage_reused_without_probe(self):
+        from hyperthymesia import models
+        import time
+        models._save({'qoder': {'at': time.time(), 'selection_version': 2, 'model': '', 'checked': [
+            {'model': 'Efficient', 'quality_pass': True, 'seconds': 19.984, 'input_tokens': 0, 'output_tokens': 0, 'ok': False}]}})
+        with mock.patch.object(models, 'acceptance', return_value=[]), mock.patch.object(models, 'list_models', return_value=['Efficient']), \
+             mock.patch.object(models, 'prices', return_value=({'Efficient': .1}, 'local')), \
+             mock.patch.object(models, '_probe', side_effect=AssertionError('不应再次收费准入')):
+            self.assertEqual(models.choose('qoder'), 'Efficient')
+        self.assertIn('token用量未知', models.explain('qoder'))
+
+    def test_doctor_check_cli_never_probes_or_mutates_model_cache(self):
+        from hyperthymesia import models
+        from hyperthymesia.__main__ import _doctor
+        import io, subprocess
+        self.cfg('[writer]\nprovider="qoder"\n')
+        models._save({'qoder': {'model': 'existing', 'selection_version': models.SELECTION_VERSION}})
+        before = (self.home / 'models.json').read_bytes()
+        with mock.patch.object(providers, 'qodercli_cmd', return_value=['node', 'qoder.js']), \
+             mock.patch.object(providers, '_run_cli', return_value=subprocess.CompletedProcess([], 0, stdout='1.1.80', stderr='')) as cli, \
+             mock.patch.object(providers, 'call', side_effect=AssertionError('doctor不能调用模型')), \
+             mock.patch.object(models, 'choose', side_effect=AssertionError('doctor不能选模')), \
+             mock.patch('sys.stdout', new_callable=io.StringIO):
+            self.assertEqual(_doctor(['--agent', 'workbuddy', '--check-cli']), 0)
+        self.assertEqual(cli.call_args.args[0], ['node', 'qoder.js', '--version'])
+        self.assertEqual((self.home / 'models.json').read_bytes(), before)
+
     def test_api_key_from_named_env_only(self):
         self.cfg('[writer]\nprovider = "openai"\nmodel = "deepseek-chat"\nbase_url = "https://api.deepseek.com/v1"\napi_key_env = "DEEPSEEK_API_KEY"\n')
         s = config.writer_settings()

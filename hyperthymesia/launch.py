@@ -35,10 +35,16 @@ def find_codebuddy():
     if explicit:
         p = Path(explicit).expanduser()
         if not p.is_file(): raise ValueError('HYPERTHYMESIA_CODEBUDDY_CLI points to a missing CLI entrypoint')
+        command(str(p), '@tencent-ai/codebuddy-code', 'codebuddy')
         return str(p)
     candidates = []
     explicit_root = os.environ.get('WORKBUDDY_INSTALL_DIR')
-    if not explicit_root: candidates.append(shutil.which('codebuddy'))
+    if not explicit_root:
+        candidates.append(shutil.which('codebuddy'))
+        # which只返回第一个；它不可用时继续搜索PATH中的其他安装。
+        extensions = ['', '.exe', '.cmd', '.bat', '.ps1'] if WINDOWS else ['']
+        for directory in os.get_exec_path():
+            candidates.extend(str(Path(directory) / ('codebuddy' + ext)) for ext in extensions)
     if not WINDOWS and not explicit_root: candidates.append('/Applications/WorkBuddy.app/Contents/Resources/app.asar.unpacked/cli/bin/codebuddy')
     roots = []
     if os.environ.get('WORKBUDDY_INSTALL_DIR'): roots.append(Path(os.environ['WORKBUDDY_INSTALL_DIR']))
@@ -50,7 +56,18 @@ def find_codebuddy():
     for root in roots:
         for name in ('resources/app.asar.unpacked/cli/bin/codebuddy', 'resources/app.asar.unpacked/cli/bin/codebuddy.cmd', 'resources/app.asar.unpacked/cli/dist/codebuddy-lite-wb.mjs'):
             candidates.append(str(root / name))
-    return next((str(p) for p in candidates if p and Path(p).is_file()), None)
+    errors = []; checked = set()
+    for p in candidates:
+        if not p or str(p) in checked or not Path(p).is_file(): continue
+        checked.add(str(p))
+        try:
+            command(str(p), '@tencent-ai/codebuddy-code', 'codebuddy')
+            return str(p)
+        except (OSError, ValueError) as exc:
+            # 自动探测的坏包装不应挡住后面的真实入口；显式指定的入口仍准确报错。
+            errors.append(str(exc))
+    if errors: raise ValueError('No usable codebuddy CLI entrypoint: ' + '; '.join(errors))
+    return None
 
 
 def _script_from_shim(path, package, command):
@@ -74,7 +91,11 @@ def _script_from_shim(path, package, command):
 def command(executable, package='', name=''):
     if not executable: return None
     path = Path(executable)
-    if path.suffix.lower() in ('.cmd', '.bat', '.ps1'):
+    shell_shim = False
+    if WINDOWS and not path.suffix and path.is_file():
+        with path.open('rb') as stream: first = stream.read(256).split(b'\n', 1)[0].lower()
+        shell_shim = (first.startswith(b'#!') and b'node' not in first) or first.startswith((b'@echo', b'node ', b'@node '))
+    if path.suffix.lower() in ('.cmd', '.bat', '.ps1') or shell_shim:
         path = _script_from_shim(path, package, name)
     else: path = path.resolve()
     if path.suffix.lower() == '.exe': return [str(path)]

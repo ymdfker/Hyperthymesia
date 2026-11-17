@@ -26,6 +26,8 @@ CREATE INDEX IF NOT EXISTS facts_object ON facts(object, active);
 CREATE TABLE IF NOT EXISTS fact_objects(fact INTEGER NOT NULL, object INTEGER NOT NULL, PRIMARY KEY(fact, object));
 CREATE TABLE IF NOT EXISTS evidence(fact INTEGER NOT NULL, source TEXT NOT NULL, quote TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS sources(id TEXT PRIMARY KEY, session TEXT, turn INTEGER, role TEXT, at TEXT, text TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS writer_operations(operation TEXT PRIMARY KEY, fact INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS writer_object_operations(operation TEXT PRIMARY KEY, object INTEGER NOT NULL);
 """
 STATE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS backlog(session TEXT NOT NULL, turn INTEGER NOT NULL, project TEXT, user_text TEXT, assistant_text TEXT,
@@ -37,6 +39,7 @@ CREATE TABLE IF NOT EXISTS backlog_agent(session TEXT PRIMARY KEY, agent TEXT);
 CREATE TABLE IF NOT EXISTS writer_sessions(store TEXT PRIMARY KEY, provider TEXT, sid TEXT, last_input INTEGER);
 CREATE TABLE IF NOT EXISTS delivered(session TEXT NOT NULL, store TEXT NOT NULL, fact INTEGER NOT NULL, digest TEXT,
   PRIMARY KEY(session, store, fact));
+CREATE TABLE IF NOT EXISTS writer_progress(batch TEXT PRIMARY KEY, project TEXT NOT NULL, payload TEXT NOT NULL, updated_at REAL);
 """
 
 
@@ -79,11 +82,15 @@ class Store:
     def rid(self, n): return 'r%s%d' % (self.scope, n)
 
     # ---- 对象
-    def add_object(self, name, purpose='', parents=(), aliases=()):
+    def add_object(self, name, purpose='', parents=(), aliases=(), operation=None):
         with tx(self.db) as d:
+            if operation:
+                previous = d.execute('SELECT object FROM writer_object_operations WHERE operation=?', (operation,)).fetchone()
+                if previous: return previous[0]
             n = d.execute('INSERT INTO objects(name, purpose, created_at) VALUES(?,?,?)', (name, purpose, time.time())).lastrowid
             for p in parents: d.execute('INSERT OR IGNORE INTO object_parents VALUES(?,?)', (n, p))
             for a in aliases: d.execute('INSERT OR IGNORE INTO aliases VALUES(?,?)', (n, a))
+            if operation: d.execute('INSERT INTO writer_object_operations VALUES(?,?)', (operation, n))
         return n
 
     def objects(self):
@@ -102,25 +109,37 @@ class Store:
             d.execute('INSERT OR IGNORE INTO sources VALUES(?,?,?,?,?,?)', (sid, session, turn, role, at, text))
 
     # ---- 事实
-    def add_fact(self, about, text, kind='fact', source_role='user', title='', evidence=(), supersedes=()):
+    def add_fact(self, about, text, kind='fact', source_role='user', title='', evidence=(), supersedes=(), operation=None, historical_of=None):
         """about：对象 id 列表，第一个为归属对象。evidence：[(来源 id, 引用)]。supersedes：被本条取代的事实 id
         （它们失效并指向本条）。返回新事实 id。"""
         now = time.time()
         with tx(self.db) as d:
+            if operation:
+                previous = d.execute('SELECT fact FROM writer_operations WHERE operation=?', (operation,)).fetchone()
+                if previous: return previous[0]
             n = d.execute('INSERT INTO facts(object, kind, source_role, title, text, created_at, updated_at) VALUES(?,?,?,?,?,?,?)',
                           (about[0], kind, source_role, title, text, now, now)).lastrowid
             for o in dict.fromkeys(about): d.execute('INSERT OR IGNORE INTO fact_objects VALUES(?,?)', (n, o))
             for s, q in evidence: d.execute('INSERT INTO evidence VALUES(?,?,?)', (n, s, q))
             for old in supersedes:
                 d.execute('UPDATE facts SET active=0, superseded_by=?, updated_at=? WHERE id=? AND active=1', (n, now, old))
+            if historical_of is not None:
+                d.execute('UPDATE facts SET active=0, superseded_by=? WHERE id=?', (historical_of, n))
+            if operation: d.execute('INSERT INTO writer_operations VALUES(?,?)', (operation, n))
         return n
 
     def set_advice_status(self, fact, effect, reason):
+        current = self.fact(fact)
+        if current and current['advice_status']:
+            previous = json.loads(current['advice_status'])
+            if previous.get('effect') == effect and previous.get('reason') == reason: return
         with tx(self.db) as d:
             d.execute('UPDATE facts SET advice_status=?, updated_at=? WHERE id=?',
                       (json.dumps({'effect': effect, 'reason': reason, 'at': time.time()}, ensure_ascii=False), time.time(), fact))
 
     def move_fact(self, fact, obj):
+        current = self.fact(fact)
+        if current and current['object'] == obj: return
         with tx(self.db) as d:
             d.execute('UPDATE facts SET object=?, updated_at=? WHERE id=?', (obj, time.time(), fact))
             d.execute('INSERT OR IGNORE INTO fact_objects VALUES(?,?)', (fact, obj))
@@ -144,7 +163,7 @@ class Store:
     def evidence_turns(self):
         """被有效的用户/混合来源事实引用过的来源 id（缺口补写的覆盖检查用）。"""
         return {r[0] for r in self.db.execute(
-            "SELECT e.source FROM evidence e JOIN facts f ON f.id=e.fact WHERE f.active=1 AND f.source_role IN ('user','mixed')")}
+            "SELECT e.source FROM evidence e JOIN facts f ON f.id=e.fact WHERE f.source_role IN ('user','mixed')")}
 
     def text_size(self):
         return self.db.execute('SELECT COALESCE(SUM(LENGTH(text)),0) FROM facts WHERE active=1').fetchone()[0]

@@ -34,7 +34,7 @@ def name():
 
 
 def model():
-    """配置/环境变量指定的模型优先；否则自动识别该提供方最便宜且够用的模型（缓存一周），识别不出才用默认。"""
+    """显式选择优先且不跑准入；自动模式复用验收并筛选，不通过时保留积压，不偷换提供方。"""
     m = settings()['model']
     if m: return m
     if name() in ('codex', 'claude', 'codebuddy', 'qoder', 'dsh'):
@@ -206,7 +206,8 @@ def _qoder(home, system, prompt, sid, log):
     usage = obj.get('usage') or {}; cached = usage.get('cache_read_input_tokens', 0)
     return Reply(obj.get('session_id') or sid, obj['result'],
                  {'input_tokens': usage.get('input_tokens', 0) + cached + usage.get('cache_creation_input_tokens', 0), 'cached_input_tokens': cached,
-                  'output_tokens': usage.get('output_tokens', 0), 'cost': obj.get('total_credits')})
+                  'output_tokens': usage.get('output_tokens', 0), 'cost': obj.get('total_credits'),
+                  'usage_status': 'reported' if usage.get('input_tokens', 0) > 0 and usage.get('output_tokens', 0) > 0 else 'unknown'})
 
 
 def _dsh(home, system, prompt, sid, log):
