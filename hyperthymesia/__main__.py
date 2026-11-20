@@ -68,6 +68,8 @@ def _doctor(argv):
                 else: print('  启动检查：通过（--version，不调用模型）')
         except Exception as exc: print('  命令行不可用：%s' % providers._failure_hint(exc))
         print('  鉴权及真实写入：尚未验证；桌面已登录不代表CLI可调用，不会自动花额度试探。')
+        print('  若 write 报“宿主CLI鉴权失败”（如 WorkBuddy Windows lite 构建）：改用自己的OpenAI兼容API，'
+              '在 %s 写 [writer] provider="openai"、model、base_url、api_key_env，再运行本命令确认 key 已读到。' % (paths.home() / 'config.toml'))
     from .store import state
     st = state(paths.home())
     try: pending = st.execute('SELECT SUM(completed_at IS NULL), SUM(completed_at IS NOT NULL) FROM backlog WHERE written=0').fetchone()

@@ -108,13 +108,13 @@ class WriterTest(unittest.TestCase):
         bad = 'rp%d' % old + 'x'   # 多一个字：编辑距离 1，可纠正
         main = J(memories=[{'title': '员工', 'text': '滨江店员工10人', 'kind': 'fact', 'about': ['p%d' % o], 'evidence': ['滨江店现在10个员工'], 'invalidates': [bad]},
                            {'title': '编造', 'text': '店长换人了', 'kind': 'fact', 'about': ['p%d' % o], 'evidence': ['店长已经换成老王'], 'invalidates': []}])
-        with self.assertRaises(writer.PendingEvidence):
-            self.run_batch(t, main, J(quotes=['还是对不上的引用']))
+        # 新规则：对不上原文的条目只挂起该条，不入库；其余条目照常确认，整批不再退回积压。
+        result = self.run_batch(t, main, J(quotes=['还是对不上的引用']))
         texts = [f['text'] for f in self.p.facts()]
         self.assertIn('滨江店员工10人', texts); self.assertNotIn('员工8人', texts); self.assertNotIn('店长换人了', texts)
-        checkpoint = json.loads(state(self.home).execute('SELECT payload FROM writer_progress').fetchone()[0])
-        self.assertNotIn('main', checkpoint['done'])
-        self.assertEqual(checkpoint['main_output']['memories'][1]['text'], '店长换人了')
+        self.assertEqual(result['held'], 1)
+        held = [json.loads(l) for l in (self.home / 'held_entries.jsonl').read_text(encoding='utf-8').splitlines()]
+        self.assertEqual(held[-1]['entries'][0]['text'], '店长换人了')
 
     def test_need_objects_delta_merge_keeps_first_answer(self):
         o = self.p.add_object('良渚店')
@@ -218,19 +218,14 @@ class WriterTest(unittest.TestCase):
         self.assertEqual(len(self.p.facts()), 1)
         self.assertEqual(self.u.facts()[0]['text'], '用户的猫叫年糕')
 
-    def test_resume_only_retries_bad_quotes_and_keeps_good_entries(self):
+    def test_unmatched_quote_held_good_entries_confirmed(self):
         turns = self.turns(('项目端口8080，超时45秒。', '收到。'))
         main = J(objects=[{'key': 'k', 'name': '配置', 'scope': 'project'}], memories=[
             {'title': '端口', 'text': '项目端口8080', 'about': ['k'], 'evidence': ['端口8080']},
             {'title': '超时', 'text': '项目超时45秒', 'about': ['k'], 'evidence': ['不存在的超时原句']}])
-        with self.assertRaises(writer.PendingEvidence): self.run_batch(turns, main, J(quotes=['仍不匹配']))
-        port = self.p.facts()[0]
-        result = self.run_batch(turns, J(quotes=['超时45秒']))
-        self.assertEqual(result['calls'], 1)
-        self.assertEqual(len(self.p.facts()), 2)
-        self.assertEqual(len(self.p.objects()), 1)
-        self.assertEqual(self.p.fact(port['id'])['text'], '项目端口8080')
-        self.assertEqual(self.p.db.execute('SELECT COUNT(*) FROM facts WHERE text=?', ('项目端口8080',)).fetchone()[0], 1)
+        result = self.run_batch(turns, main, J(quotes=['仍不匹配']))
+        self.assertEqual(result['held'], 1)
+        self.assertEqual([f['text'] for f in self.p.facts()], ['项目端口8080'])
 
     def test_old_history_cannot_supersede_newer_source(self):
         o = self.p.add_object('超时')

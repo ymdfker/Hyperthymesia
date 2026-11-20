@@ -10,7 +10,7 @@
   fake   ：测试用，按顺序返回预设回答（不调用任何模型）
 所有提供方返回 Reply(sid, text, usage)；usage 统一为 input_tokens / cached_input_tokens / output_tokens。
 sid 是可续接的会话编号：codex/claude 由命令行给出，openai 由本地保存的消息历史实现（接口本身无状态）。"""
-import json, os, shutil, subprocess, tempfile, uuid
+import json, os, shutil, subprocess, tempfile, time, uuid
 from collections import namedtuple
 from pathlib import Path
 
@@ -48,6 +48,23 @@ def _run_cli(cmd, agent=None, **kwargs):
     from . import launch
     kwargs['env'] = internal_env(launch.environment(agent, cmd, kwargs.get('env')))
     return subprocess.run(cmd, **kwargs)
+
+
+class cli_slot:
+    """同一宿主CLI跨进程串行：多个项目的写入器同时调用时，CLI会在同一本地端口监听而冲突（EADDRINUSE）。
+    非阻塞轮询拿锁（Windows 的阻塞锁只等约10秒），最多等30分钟；超时报错，积压保留。"""
+    def __init__(self, home, agent, wait=1800):
+        self.home, self.agent, self.wait, self.lock = home, agent, wait, None
+    def __enter__(self):
+        from .writecmd import Lock
+        end = time.time() + self.wait
+        while True:
+            lk = Lock('cli:' + self.agent, home=self.home).__enter__()
+            if lk.ok: self.lock = lk; return self
+            if time.time() > end: raise ProviderError('%s CLI 一直被另一个写入进程占用（pid=%s），本批未调用，积压保留。' % (self.agent, lk.holder))
+            time.sleep(2)
+    def __exit__(self, *args):
+        if self.lock: self.lock.__exit__(*args)
 
 
 def _workdir(home):
@@ -110,10 +127,20 @@ def codebuddy_cmd():
     except ValueError as exc: raise ProviderError(str(exc))
 
 
+AUTH_HINT = ('宿主CLI鉴权失败；桌面已登录不代表CLI可用。若当前lite构建没有登录入口，请配置自己的OpenAI兼容API'
+             '（程序不会自动换用其他账号或API）：\n'
+             '1. 新建 ~/.hyperthymesia/config.toml（Windows 为 %USERPROFILE%\\.hyperthymesia\\config.toml），写入：\n'
+             '   [writer]\n   provider = "openai"\n   model = "deepseek-chat"\n'
+             '   base_url = "https://api.deepseek.com/v1"\n   api_key_env = "DEEPSEEK_API_KEY"\n'
+             '   （换成你的服务商的地址和模型；文件里只写环境变量名，不写 key）\n'
+             '2. 把 key 放进该环境变量：Windows 执行 setx DEEPSEEK_API_KEY "你的key"；Mac/Linux 写进 shell 配置。之后完全退出并重开宿主。\n'
+             '3. 执行 hyperthymesia doctor 确认“写入提供方 openai、key 环境变量已设置”，再执行 hyperthymesia write。')
+
+
 def _failure_hint(text):
     value = str(text).lower()
     if any(x in value for x in ('authentication required', 'not logged in', 'unauthorized', 'please use /login')):
-        return '宿主CLI鉴权失败；桌面已登录不代表CLI可用。若当前lite构建没有登录入口，请明确配置自己的OpenAI兼容API；程序不会自动换用其他账号或API。'
+        return AUTH_HINT
     if 'sdk_worker_removed' in value or 'sdk_invalid_args' in value:
         return 'Qoder SDK启动模式与CLI调用不兼容；请检查CLI入口及SDK环境变量，不要直接认定所有新版CLI都需要降级。'
     if 'cannot find module' in value or 'module_not_found' in value:
@@ -152,7 +179,12 @@ def _codebuddy(home, system, prompt, sid, log):
     chosen = model()
     cmd = cmd0 + ['-p', '--output-format', 'json', '--tools', '', '--strict-mcp-config', '--system-prompt', system] + \
           (['--model', chosen] if chosen else []) + (['--resume', sid] if sid else [])
-    result = _run_cli(cmd, agent='codebuddy', input=prompt, capture_output=True, text=True, encoding='utf-8', errors='replace', cwd=_workdir(home), timeout=1800)
+    with cli_slot(home, 'codebuddy'):
+        result = _run_cli(cmd, agent='codebuddy', input=prompt, capture_output=True, text=True, encoding='utf-8', errors='replace', cwd=_workdir(home), timeout=1800)
+        if result.returncode and 'EADDRINUSE' in (result.stderr or '') + (result.stdout or ''):
+            # 锁外的其他程序（如宿主自身）也可能占着CLI的本地端口：退避后只重试一次，仍失败照常报错。
+            log.append({'step': 'cli_port_busy_retry'}); time.sleep(5)
+            result = _run_cli(cmd, agent='codebuddy', input=prompt, capture_output=True, text=True, encoding='utf-8', errors='replace', cwd=_workdir(home), timeout=1800)
     obj, credit = _result_object(result, 'codebuddy')
     usage = obj.get('usage') or {}
     return Reply(obj.get('session_id') or sid, obj['result'],

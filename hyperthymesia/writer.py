@@ -137,6 +137,14 @@ class Batch:
             if key in base: setattr(self, key, base[key])
         self.new_facts = [tuple(x) for x in self.new_facts]
 
+    def hold(self, reason, entries, note):
+        """把无法核对原文的条目追加到 held_entries.jsonl，留给用户查看；不入库。"""
+        self.held = getattr(self, 'held', 0) + len(entries)
+        rec = {'at': time.strftime('%Y-%m-%dT%H:%M:%S'), 'project': self.project, 'batch': getattr(self, 'batch_id', None),
+               'reason': reason, 'note': note, 'entries': entries}
+        with open(Path(self.home) / 'held_entries.jsonl', 'a', encoding='utf-8') as f:
+            f.write(json.dumps(rec, ensure_ascii=False) + '\n')
+
     def checkpoint(self, base=False):
         if base:
             self.progress['base'] = {key: getattr(self, key) for key in ('seen', 'keys', 'made', 'new_facts')}
@@ -276,7 +284,7 @@ class Batch:
         self.progress['complete'] = True; self.checkpoint()
         tot = {k: sum(u.get(k, 0) for u in self.usage) for k in ('input_tokens', 'cached_input_tokens', 'output_tokens')}
         return {'calls': self.calls, 'usage': tot, 'new_facts': len(self.new_facts), 'secs': round(time.time() - t0, 1),
-                'log': self.log, 'answers': self.answers, 'batch': self.batch_id, 'attempts': self.progress.get('attempts', [])}
+                'log': self.log, 'answers': self.answers, 'batch': self.batch_id, 'held': getattr(self, 'held', 0), 'attempts': self.progress.get('attempts', [])}
 
     def collect_main(self):
         self.phase = 'extract'; self.slots = {}
@@ -443,8 +451,10 @@ class Batch:
                     # 下次显式续接只重试这次引用请求，抽取与正确条目不重写。
                     self.progress['responses'].pop(slot, None); self.checkpoint()
                     self.log.append({'step': 'ask_quotes_failed', 'error': str(exc)[:120]}); raise
+            # 补引用后仍对不上原文的条目只挂起这几条（不入库、不假报成功），其余已核对的条目照常确认，
+            # 避免个别条目让整批永远退回积压、每次重试都白花额度（反馈 #6 第三轮 P1-C）。
+            self.hold('unsourced', pending, '补引用后仍未在原文中找到连续片段')
             self.log.append({'step': 'pending_unsourced', 'titles': [m.get('title') for m in pending]})
-            raise PendingEvidence('引用仍未匹配，条目与原始回复已保留，整批未确认完成：' + '、'.join(str(m.get('title', '')) for m in pending))
 
     def apply_conflicts(self, groups):
         for group in groups or []:
@@ -558,7 +568,9 @@ class Batch:
                             if e['text'] and _norm(q) and _norm(q) in _norm(e['text'])
                             and any(e['source'] == old_source for old_source, _ in ev)]
                 if any(not any(q == match for _, match in selected) for q in m['evidence']):
-                    raise PendingEvidence('冲突更正引用未匹配；原回复保留，不重写正文')
+                    # 这一组合并引用对不上：两条旧记录原样保留，只挂起这组合并，不影响其他组和整批确认。
+                    self.hold('conflict_unsourced', [dict(m, refs=g.get('refs', []))], '冲突更正引用未匹配，旧记录未改')
+                    self.log.append({'step': 'conflict_unsourced', 'refs': g.get('refs', [])}); continue
                 ev = list(dict.fromkeys(selected))
             roles = {r[0] for sid, _ in ev for r in st.db.execute('SELECT role FROM sources WHERE id=?', (sid,))}
             if not roles: roles = {x['source_role'] for x in writable}

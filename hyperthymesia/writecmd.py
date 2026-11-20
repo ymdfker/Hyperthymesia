@@ -142,8 +142,9 @@ def _write_rows(project, st, rows, failures=None, fixed_batch=False):
         with tx(st):
             st.executemany('UPDATE backlog SET written=1 WHERE session=? AND turn=?', [(r['session'], r['turn']) for r in batch])
         _log({'at': time.strftime('%Y-%m-%dT%H:%M:%S'), 'project': project, 'turns': len(batch), 'calls': res['calls'], 'usage': res['usage'],
-              'new_facts': res['new_facts'], 'secs': round(time.time() - t0, 1), 'steps': [x.get('step') for x in res['log']],
+              'new_facts': res['new_facts'], 'held': res.get('held', 0), 'secs': round(time.time() - t0, 1), 'steps': [x.get('step') for x in res['log']],
               'batch': res.get('batch'), 'answers': [a.get('reply', '') for a in res.get('attempts', [])] or res.get('answers', [])})
+        write_project.held = getattr(write_project, 'held', 0) + res.get('held', 0)
         if res.get('batch'):
             st.execute('DELETE FROM writer_progress WHERE batch=?', (res['batch'],))
         return len(batch)
@@ -174,7 +175,7 @@ def run(argv):
         if p and is_writer_workdir(p):
             # 旧版本自我循环抓回的写入器会话，不是用户对话；不写入、不删除，留给用户自行清理。
             print('%s：写入器自身工作目录的积压（旧版本自我循环产物），跳过，不写入记忆。' % p); continue
-        write_project.holder = None
+        write_project.holder = None; write_project.held = 0
         try: n = write_project(p)
         except Exception as exc:
             print('%s：写入失败，材料保留。%s' % (p or '（个人）', exc)); failed = True; continue
@@ -186,6 +187,12 @@ def run(argv):
             if n == 0:
                 st = state(paths.home())
                 open_rows = st.execute('SELECT COUNT(*) FROM backlog WHERE project=? AND written=0 AND completed_at IS NULL', (p,)).fetchone()[0]
-                if open_rows: msg += '（另有%d轮尚未完成，会话结束后才会写入）' % open_rows
+                done_rows = st.execute('SELECT COUNT(*) FROM backlog WHERE project=? AND written=1', (p,)).fetchone()[0]
+                why = ['没有已完成、待写入的轮次']
+                if done_rows: why.append('此前已写入%d轮，不重复写' % done_rows)
+                if open_rows: why.append('另有%d轮尚未完成，会话结束后才会写入' % open_rows)
+                msg += '（' + '；'.join(why) + '）'
+            held = getattr(write_project, 'held', 0)
+            if held: msg += '；%d条记忆引用对不上原文，未入库，已挂起到held_entries.jsonl' % held
         print('%s：%s' % (p or '（个人）', msg))
     return 1 if failed else 0

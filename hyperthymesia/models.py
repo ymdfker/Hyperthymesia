@@ -33,7 +33,19 @@ def _load():
     except (OSError, ValueError): return {}
 
 
-def _save(d): _cache_path().write_text(json.dumps(d, ensure_ascii=False, indent=1), encoding='utf-8')
+def _save(d):
+    """内容未变不写（避免诊断或并发写入无谓刷新文件）；变了先写临时文件再替换，读者不会看到半截文件。"""
+    text = json.dumps(d, ensure_ascii=False, indent=1); p = _cache_path()
+    try:
+        if p.read_text(encoding='utf-8') == text: return
+    except OSError: pass
+    tmp = p.with_name(p.name + '.%d.tmp' % os.getpid()); tmp.write_text(text, encoding='utf-8'); os.replace(str(tmp), str(p))
+
+
+def _why(r):
+    """准入未过的原因：优先判定理由，其次质量问题/错误；都没有时指向真实存放位置。"""
+    return ','.join(r.get('reasons') or r.get('quality_issues') or ([r['error']] if r.get('error') else [])) or \
+        '无记录原因，见%s中checked' % _cache_path()
 
 
 # ---------------------------------------------------------------- 可用模型
@@ -342,9 +354,9 @@ def choose(provider, refresh=False):
                        'source': source, 'checked': checked, 'selection_version': SELECTION_VERSION, 'evidence': fingerprint}
     _save(cache)
     if not chosen:
-        details = '; '.join('%s: %s' % (r.get('model'), ','.join(r.get('reasons') or ['无可用准入结果'])) for r in checked)
+        details = '; '.join('%s: %s' % (r.get('model'), _why(r)) for r in checked)
         raise ProviderError('未选到可用后台模型，积压保留。' + details +
-                            '；详见logs/models.log。用户可明确指定本机支持的模型：在' + str(paths.home() / 'config.toml') +
+                            '；试探原文见logs/models.log，判定见models.json。用户可明确指定本机支持的模型：在' + str(paths.home() / 'config.toml') +
                             '中设置 [writer] model = "实际支持的模型ID"。显式选择跳过自动准入，不代表已通过质量验收；不会自动改用其他宿主或付费API。')
     return chosen
 
@@ -357,7 +369,7 @@ def explain(provider):
     note = '旧版缓存待重新评估，不直接沿用' if stale else '已按质量与速度筛选'
     if c.get('model') and _screen(selected)[2]: note += '；token用量未知，未检查用量比例'
     if not c.get('model') and c.get('checked'):
-        note += '；' + '; '.join('%s:%s' % (r.get('model'), ','.join(r.get('reasons') or ['参见logs/models.log'])) for r in c['checked'])
+        note += '；' + '; '.join('%s:%s' % (r.get('model'), _why(r)) for r in c['checked'])
     return '%s（%s；依据：%s）' % (c.get('model') or '无通过准入的模型', note, c.get('source', ''))
 
 
