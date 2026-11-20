@@ -19,6 +19,34 @@ class ReaderTest(unittest.TestCase):
 
     def tearDown(self): close_all(); self.tmp.cleanup()
 
+    def test_claim_status_and_conflict_changes_are_injected(self):
+        request = self.p.add_fact([self.cfg], '要求发布v3', assertion='request', applicability='本次发布')
+        report = self.p.add_fact([self.cfg], '已发布v2', assertion='report')
+        reader.context(self.stores, self.st, 'claims')
+        self.p.mark_conflict(request, report, '是否已完成v3尚不清楚')
+        update = reader.context(self.stores, self.st, 'claims')
+        self.assertIn('有未决冲突', update)
+        self.assertIn('用户要求', update); self.assertIn('完成/状态报告', update)
+        self.assertIn('本次发布', update)
+        self.assertEqual(reader.context(self.stores, self.st, 'claims'), '')
+        self.p.add_fact([self.cfg], '已发布v3', assertion='report', supersedes=[request, report])
+        update = reader.context(self.stores, self.st, 'claims')
+        self.assertIn('已发布v3', update)
+        self.assertFalse(self.p.conflicts(request))
+        self.assertEqual(self.p.fact(request)['text'], '要求发布v3')
+
+    def test_old_store_metadata_migration_preserves_body(self):
+        import sqlite3
+        path = self.home / 'legacy.db'
+        db = sqlite3.connect(str(path))
+        db.execute("CREATE TABLE facts(id INTEGER PRIMARY KEY, object INTEGER NOT NULL, kind TEXT DEFAULT 'fact', source_role TEXT DEFAULT 'user', title TEXT DEFAULT '', text TEXT NOT NULL, active INTEGER DEFAULT 1, superseded_by INTEGER, advice_status TEXT, created_at REAL, updated_at REAL)")
+        db.execute("INSERT INTO facts(id, object, text) VALUES(1, 1, '旧正文和条件不改')")
+        db.commit(); db.close()
+        migrated = Store(path, 'p')
+        self.assertEqual(migrated.fact(1)['text'], '旧正文和条件不改')
+        self.assertEqual(migrated.fact(1)['assertion'], '')
+        self.assertEqual(Store(path, 'p').fact(1)['applicability'], '')
+
     def test_snapshot_full_then_incremental_then_stale(self):
         c1 = reader.context(self.stores, self.st, 's1')
         self.assertIn('（长期记忆全文）', c1); self.assertIn('年糕是英短，3岁', c1); self.assertIn('低库存阈值为10', c1)

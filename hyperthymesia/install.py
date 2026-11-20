@@ -328,11 +328,32 @@ def dsh_writer_check():
 AGENTS = {'dsh': dsh, 'trae': trae, 'claude': claude, 'codex': codex, 'workbuddy': workbuddy, 'codebuddy': codebuddy, 'qoder': qoder}   # 桌面与 CLI 使用不同的用户配置入口
 
 
+def stable_binary():
+    """打包版若以带版本号等的文件名运行（如 hyperthymesia-v0.2.7.exe），先复制到固定路径再写配置，
+    以后替换该固定文件即可升级，宿主配置不再钉死旧版本文件名。返回提示文字；无需处理时返回空串。"""
+    if not getattr(sys, 'frozen', False) or os.environ.get('HYPERTHYMESIA_SELF'): return ''
+    exe = Path(sys.executable)
+    name = 'hyperthymesia.exe' if os.name == 'nt' else 'hyperthymesia'
+    if exe.name.lower() == name: return ''
+    target = Path(os.environ.get('USERPROFILE') or os.environ.get('HOME') or Path.home()) / '.hyperthymesia' / 'bin' / name
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if not (target.exists() and target.samefile(exe)):
+            tmp = target.with_name(target.name + '.new'); shutil.copy2(exe, tmp); os.replace(tmp, target)
+    except OSError as exc:
+        return '注意：无法复制到固定路径 %s（%s），配置将引用当前文件 %s；升级时需重新执行 install。' % (target, exc, exe)
+    os.environ['HYPERTHYMESIA_SELF'] = str(target)
+    return '已复制到固定路径 %s，宿主配置引用该路径；以后替换它即可升级。' % target
+
+
 def run(argv, remove=False):
     """hyperthymesia install|uninstall <claude|codex> [--project 目录]"""
     if not argv or argv[0] not in AGENTS:
         print('用法：hyperthymesia %s <%s> [--project 目录]' % ('uninstall' if remove else 'install', '|'.join(AGENTS)), file=sys.stderr); return 2
     project = argv[argv.index('--project') + 1] if '--project' in argv else None
+    if not remove:
+        stable = stable_binary()
+        if stable: print(stable)
     files = AGENTS[argv[0]](project, remove)
     print(('已移除' if remove else '已写入') + '：' + '、'.join(str(f) for f in files))
     if argv[0] == 'trae' and not remove:

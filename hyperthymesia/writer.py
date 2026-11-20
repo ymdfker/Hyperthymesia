@@ -25,7 +25,7 @@ CONFLICT_CAP = 40
 DELTA_ASK = ('请只回复需要变更的部分（同样的JSON格式）：新增的条目放memories/replacements/objects等字段；此前已交的memories中若有某条应改为更正上面的旧记录，'
              '在replacements里给出更正，并在"withdraw"里列出那条原memories的title。此前已交且无需变动的内容不要重复，程序会原样保留。没有任何变化就回复{}。')
 GAP_NOTE = ('（补漏）下面几轮在本批整理时，用户本人的事实或决定没有被记下。按与主整理完全相同的规则和口径重新判断这几轮，不要因为是补漏而放宽标准：'
-            '用户说出的事实、决定、要求和数值完整保存。' + SUGGESTION_POLICY +
+            '按原文顺序逐条直接抽取，不先概括成摘要。保留具体值、条件与适用范围；一次性执行指令不保存为长期要求，请求不能证明已完成。' + SUGGESTION_POLICY +
             '特别检查用户在请求前顺带交代的事实（如“车险5月20日到期，准备…”“年糕是英短，3岁，我下周…”）。已在旧记录里的不要重复。'
             '这几轮若没有需要补记的用户事实或决定，回复{}。')
 
@@ -59,6 +59,10 @@ def _fix(t, err):
     return valid[0] if len(valid) == 1 else None
 
 
+FORMAT_FIX = ('你上一条回复的JSON有语法错误：%s。只修正JSON语法（逗号、引号、括号、转义），'
+              '内容逐字保留，不增删、不改写任何字段或正文，也不要重新处理材料。只回复修正后的完整JSON。\n<previous_reply>\n%s\n</previous_reply>')
+
+
 def parse(text):
     t = re.sub(r'^```(?:json)?\s*|\s*```$', '', (text or '').strip())
     i, j = t.find('{'), t.rfind('}')
@@ -74,7 +78,7 @@ def parse(text):
 
 
 def validate_submission(value):
-    fields = {'objects', 'memories', 'replacements', 'record_moves', 'advice_updates', 'need_objects', 'withdraw'}
+    fields = {'objects', 'memories', 'replacements', 'record_moves', 'advice_updates', 'need_objects', 'withdraw', 'conflicts'}
     if not isinstance(value, dict) or set(value) - fields:
         raise providers.ProviderError('写入结果不符合接口：需要memories等规定字段；不是成功的空写，原材料保留。')
     for field, entries in value.items():
@@ -184,7 +188,7 @@ class Batch:
         st = self.stores[sc]; out = []
         for f in st.facts(objects=objs):
             ref = st.rid(f['id']); ro = f['kind'] == 'suggestion' and f['source_role'] == 'assistant'
-            r = {'scope': sc, 'id': f['id'], 'object': f['object'], 'readonly': ro, 'text': f['text'], 'advice': bool(f['advice_status']), 'about': f['about']}
+            r = {'scope': sc, 'id': f['id'], 'object': f['object'], 'readonly': ro, 'text': f['text'], 'advice': bool(f['advice_status']), 'about': f['about'], 'assertion': f.get('assertion', ''), 'applicability': f.get('applicability', '')}
             self.seen[ref] = r; out.append((ref, r))
         return out
 
@@ -219,6 +223,11 @@ class Batch:
             for ref, r in rs:
                 out.append('%s %s%s%s' % (ref, ('〔只读〕' if r['readonly'] else '') + ('〔依据已变〕' if r.get('advice') else ''),
                            '〔来源时间%s〕' % self.date_label(r['scope'], r['id']), r['text']))
+                meta = ' '.join(x for x in (r.get('assertion'), r.get('applicability')) if x)
+                if meta: out.append('  陈述类型/适用范围：' + meta)
+                for e in self.stores[sc].evidence(r['id']):
+                    out.append('  依据（%s %s）：%s' % (e['role'] or '未知作者', e['at'] or '未知时间', e['quote']))
+                for c in self.stores[sc].conflicts(r['id']): out.append('  未决冲突：' + c['reason'])
         return '\n'.join(out) or '（无）'
 
     # ------------------------------------------------------------ 模型调用与写入会话复用
@@ -285,7 +294,15 @@ class Batch:
             try: got = parse(rep.text)
             except ValueError as exc:
                 self.log.append({'step': 'parse_error', 'error': str(exc)[:200]})
-                raise providers.ProviderError('回复格式有歧义，原回复已保存，未要求重写正确内容：' + str(exc)) from exc
+                if not isinstance(exc, json.JSONDecodeError):
+                    raise providers.ProviderError('回复格式有歧义，原回复已保存，未要求重写正确内容：' + str(exc)) from exc
+                # 只修语法：把出错位置和原回复交回模型，要求逐字保留内容、只改 JSON 语法；不重新抽取，也只给一次机会。
+                fix = self.ask(FORMAT_FIX % (str(exc), rep.text), sid); sid = fix.sid
+                try: got = parse(fix.text)
+                except ValueError as exc2:
+                    self.log.append({'step': 'format_fix_failed', 'error': str(exc2)[:200]})
+                    raise providers.ProviderError('回复JSON语法错误，只修格式的重发仍无法解析；两次原回复均已保存：' + str(exc2)) from exc2
+                self.log.append({'step': 'format_fixed', 'error': str(exc)[:200]})
             validate_submission(got)
             out = merge_delta(base, got) if base is not None else got; base = None
             need = [i for i in out.pop('need_objects', []) or [] if self._obj(i) and self._obj(i) not in shown]
@@ -391,9 +408,11 @@ class Batch:
                     else: sup.append(rec['id'])
                 op = self.operation([sc, about, m.get('text', ''), kind, m.get('title', '')])
                 n = self.stores[sc].add_fact([a[1] for a in about], m.get('text', ''), kind, role, m.get('title', ''), ev, sup,
-                                           operation=op, historical_of=max(newer)[1] if newer else None)
+                                           operation=op, historical_of=max(newer)[1] if newer else None,
+                                           assertion=m.get('assertion', ''), applicability=m.get('applicability', ''))
                 self.new_facts.append((sc, n))
                 for s in sup: self.seen.pop(self.stores[sc].rid(s), None)
+        self.apply_conflicts(out.get('conflicts', []))
         for mv in out.get('record_moves', []) or []:
             tgt = resolve(mv.get('target'))
             for r in (self._ref(x) for x in mv.get('refs', []) or []):
@@ -426,6 +445,16 @@ class Batch:
                     self.log.append({'step': 'ask_quotes_failed', 'error': str(exc)[:120]}); raise
             self.log.append({'step': 'pending_unsourced', 'titles': [m.get('title') for m in pending]})
             raise PendingEvidence('引用仍未匹配，条目与原始回复已保留，整批未确认完成：' + '、'.join(str(m.get('title', '')) for m in pending))
+
+    def apply_conflicts(self, groups):
+        for group in groups or []:
+            refs = [self._ref(r) for r in group.get('refs', [])]
+            refs = list(dict.fromkeys(r for r in refs if r))
+            for i, a in enumerate(refs):
+                for b in refs[i + 1:]:
+                    x, y = self.seen[a], self.seen[b]
+                    if x['scope'] == y['scope']:
+                        self.stores[x['scope']].mark_conflict(x['id'], y['id'], group.get('reason') or '现有依据不足以判定当前状态')
 
     def _related(self, sc, obj, about):
         st = self.stores[sc]; par = {}
@@ -472,6 +501,11 @@ class Batch:
                     seen.add(frozenset((sc, n, g['id']))); groups.append((sc, f, g))
         return groups[:CONFLICT_CAP]
 
+    @staticmethod
+    def claim_label(f):
+        parts = [f.get('assertion'), f.get('applicability')]
+        return ('〔' + '；'.join(x for x in parts if x) + '〕') if any(parts) else ''
+
     def conflict_check(self):
         groups = self.progress.get('conflict_groups')
         if groups is None:
@@ -479,24 +513,33 @@ class Batch:
             self.progress['conflict_groups'] = groups; self.checkpoint()
         if not groups: return
         refs = {}
-        lines = []
+        lines = []; sources = {}; bindings = []
         for k, (sc, f, g) in enumerate(groups, 1):
             st = self.stores[sc]
             for x in (f, g):
                 r = st.rid(x['id']); refs[r] = (sc, x)
                 self.seen.setdefault(r, {'scope': sc, 'id': x['id'], 'object': x['object'], 'about': x.get('about', [x['object']]),
                                          'readonly': x['kind'] == 'suggestion' and x['source_role'] == 'assistant', 'text': x['text']})
+            for x in (f, g):
+                for e in st.evidence(x['id']):
+                    sources[(sc, e['source'])] = e
+                    binding = '%s 依据（%s %s）：%s' % (st.rid(x['id']), e['role'] or '未知作者', e['at'] or '未知时间', e['quote'])
+                    if binding not in bindings: bindings.append(binding)
             lines.append('组%d：\n  %s [%s]〔来源时间%s〕%s\n  %s [%s]〔来源时间%s〕%s' %
-                         (k, st.rid(f['id']), st.oid(f['object']), self.date_label(sc, f['id']), f['text'],
-                          st.rid(g['id']), st.oid(g['object']), self.date_label(sc, g['id']), g['text']))
+                         (k, st.rid(f['id']), st.oid(f['object']), self.date_label(sc, f['id']), f['text'] + self.claim_label(f),
+                          st.rid(g['id']), st.oid(g['object']), self.date_label(sc, g['id']), g['text'] + self.claim_label(g)))
         prompt = ('写入后检查：以下每组是同一对象或内容相近的现行记录（每行：ref [所属对象ID] 正文）。判断其中一条成立后，另一条是否不再成立：同一属性被改了值，'
                   '或措辞不同但被否定、取代、终止（不再…、改为…、调走、离职、搬走、停用、取消），或两条重复。属于不同对象的同类属性（如两家门店各自的价格、两个人各自的职务）是两件不同的事，不要合并。'
                   '历史导入可能晚于事实发生：按原始来源时间判断新旧，不按入库先后；旧决定不得覆盖后来明确更正的决定。'
                   '一次性执行指令不代表长期规则；已完成/已撤回状态须保留。合并只在现有正文之间取有依据的值，不根据增量重新计算。'
-                  '若是，用replacements引用该组两条ref，写一条合并后的最新正文（kind照常标注，evidence可省略）；若确实是两件不同的事，不要列出。只回复{"replacements":[…]}，没有就回复{"replacements":[]}。\n'
-                  + '\n'.join(lines))
+                  '若是，用replacements引用该组两条ref，写合并后的最新正文。保留条件、适用范围和陈述类型（assertion/applicability），不要把请求当成完成报告。evidence填写下面来源原文的连续引用，覆盖新正文主张；旧接口省略时只继承原记录证据，不视为已证明新正文。'
+                  '确有矛盾但无法判定时返回conflicts:[{"refs":[…],"reason":"…"}]，两者保留并向读取方标为未决。时间不同或对象相同本身不构成取代。不同的事不要合并。无变化回复{}。\n'
+                  + '\n'.join(lines) + '\n' + '\n'.join(bindings) + '\n<supporting_sources>\n' + '\n'.join(
+                      '[%s %s]\n%s' % (e['role'] or '未知作者', e['at'] or '未知时间', e['text'] or ('原文缺失；已有引用：' + e['quote'])) for e in sources.values()) + '\n</supporting_sources>')
         try:
-            reps = validate_submission(parse(self.ask(prompt).text)).get('replacements', []) or []
+            result = validate_submission(parse(self.ask(prompt).text))
+            self.apply_conflicts(result.get('conflicts', []))
+            reps = result.get('replacements', []) or []
         except (ValueError, providers.ProviderError) as exc:
             self.log.append({'step': 'conflict_failed', 'error': str(exc)[:120]}); raise
         merged = 0
@@ -510,11 +553,20 @@ class Batch:
             if not writable: continue
             st = self.stores[sc]; m = ms[0]; base = writable[0]
             ev = [(e['source'], e['quote']) for x in writable for e in st.db.execute('SELECT source, quote FROM evidence WHERE fact=?', (x['id'],))]
-            roles = {x['source_role'] for x in writable}
+            if m.get('evidence'):
+                selected = [(e['source'], q) for q in m['evidence'] for e in sources.values()
+                            if e['text'] and _norm(q) and _norm(q) in _norm(e['text'])
+                            and any(e['source'] == old_source for old_source, _ in ev)]
+                if any(not any(q == match for _, match in selected) for q in m['evidence']):
+                    raise PendingEvidence('冲突更正引用未匹配；原回复保留，不重写正文')
+                ev = list(dict.fromkeys(selected))
+            roles = {r[0] for sid, _ in ev for r in st.db.execute('SELECT role FROM sources WHERE id=?', (sid,))}
+            if not roles: roles = {x['source_role'] for x in writable}
             role = 'mixed' if len(roles) > 1 or 'mixed' in roles else roles.pop()
-            n = st.add_fact(sorted({base['object']} | {x['object'] for x in writable}), m.get('text', base['text']),
+            n = st.add_fact(list(dict.fromkeys([base['object']] + [o for x in writable for o in x.get('about', [x['object']])])), m.get('text', base['text']),
                             'suggestion' if m.get('kind') == 'suggestion' else 'fact', role, m.get('title', base['title']), ev, [x['id'] for x in writable],
-                            operation=self.operation(['conflict', sc, sorted(x['id'] for x in writable), m]))
+                            operation=self.operation(['conflict', sc, sorted(x['id'] for x in writable), m]),
+                            assertion=m.get('assertion', ''), applicability=m.get('applicability', ''))
             self.new_facts.append((sc, n)); merged += 1
         self.log.append({'step': 'conflict_check', 'groups': len(groups), 'merged': merged})
 
@@ -541,7 +593,7 @@ def merge_delta(base, delta):
     out['replacements'] = [g for g in base.get('replacements', []) or [] if not set(g.get('refs', [])) & dref] + list(delta.get('replacements', []) or [])
     keys = {o.get('key') for o in base.get('objects', []) or []}
     out['objects'] = list(base.get('objects', []) or []) + [o for o in delta.get('objects', []) or [] if o.get('key') not in keys]
-    for k in ('record_moves', 'advice_updates'):
+    for k in ('record_moves', 'advice_updates', 'conflicts'):
         seen = set(); out[k] = []
         for x in list(base.get(k, []) or []) + list(delta.get(k, []) or []):
             j = json.dumps(x, sort_keys=True, ensure_ascii=False)

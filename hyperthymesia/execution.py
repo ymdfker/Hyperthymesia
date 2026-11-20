@@ -13,3 +13,16 @@ def internal_env(env=None):
 
 def is_internal():
     return os.environ.get(INTERNAL_ENV) == '1'
+
+
+def is_writer_workdir(cwd):
+    """写入器自己的空工作目录。有的宿主（如 WorkBuddy、Qoder 桌面端）启动钩子时不继承环境变量，
+    只能再按目录排除，避免写入器会话被当成用户对话抓回（自我循环）。"""
+    if not cwd: return False
+    from . import paths
+    try:
+        base = os.path.normcase(os.path.realpath(str(paths.home() / 'writer_work')))
+        here = os.path.normcase(os.path.realpath(str(cwd)))
+    except (OSError, ValueError):
+        return False
+    return here == base or here.startswith(base + os.sep)

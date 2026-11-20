@@ -114,9 +114,28 @@ class ConfigTest(unittest.TestCase):
                'suggestions': ['失败先保留现场', '然后检查日志']}
         self.assertEqual(models._probe_quality(got), (True, []))
         got['suggestions'].append('可以帮忙写通知')
-        self.assertFalse(models._probe_quality(got)[0])
+        # 客套提议只记警告，不再让事实全对的模型整体不可用（issue #5）
+        self.assertEqual(models._probe_quality(got), (True, ['保存了写通知的客套提议']))
+        got['suggestions'].pop(); got['facts']['release'] = '每周四'
+        self.assertTrue(models._probe_quality(got)[0])
+        got['suggestions'].append('可以帮忙写通知')
         got['suggestions'].pop(); got['facts']['timeout'] = '45秒'
         self.assertFalse(models._probe_quality(got)[0])
+
+    def test_cached_probe_reply_is_rescored_without_new_request(self):
+        import json, tempfile, time
+        from unittest import mock
+        from hyperthymesia import models
+        reply = json.dumps({'facts': {'timeout': '60秒', 'condition': '仅工作日启用', 'reviewer': 'Priya', 'release': '每周四发布'},
+                            'suggestions': ['失败时先保留现场，再检查日志', '帮写通知']}, ensure_ascii=False)
+        row = {'model': 'Qwen3.8-Flash', 'quality_pass': False, 'quality_issues': ['保存了写通知的客套提议'], 'reply': reply,
+               'seconds': 20, 'input_tokens': 0, 'output_tokens': 0, 'usage_status': 'unknown'}
+        with tempfile.TemporaryDirectory() as d, mock.patch.dict('os.environ', {'HYPERTHYMESIA_HOME': d}):
+            models._save({'qoder': {'model': '', 'at': time.time(), 'checked': [row], 'selection_version': models.SELECTION_VERSION - 1}})
+            with mock.patch.object(models, 'list_models', return_value=['Qwen3.8-Flash']), \
+                 mock.patch.object(models, 'prices', return_value=({}, 'test')), \
+                 mock.patch.object(models, '_probe', side_effect=AssertionError('不应再次请求模型')):
+                self.assertEqual(models.choose('qoder'), 'Qwen3.8-Flash')
 
     def test_probe_records_redacted_reply_and_unknown_usage(self):
         from hyperthymesia import models

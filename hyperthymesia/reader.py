@@ -18,13 +18,18 @@ def _digest(text): return hashlib.sha1(text.encode('utf-8')).hexdigest()[:12]
 
 
 def _line(f):
+    tags = {'request': '用户要求', 'decision': '已作决定', 'report': '完成/状态报告', 'observation': '原始陈述'}
+    prefix = ('〔' + tags[f['assertion']] + '〕') if f.get('assertion') in tags else ''
+    if f.get('applicability'): prefix += '〔适用：' + f['applicability'] + '〕'
+    if f.get('conflicts'): prefix += '〔有未决冲突：' + '；'.join(dict.fromkeys(c['reason'] for c in f['conflicts'])) + '〕'
+
     if f['kind'] == 'suggestion' and f['source_role'] == 'assistant':
         t = '助手建议：' + (f['title'] or f['text'][:24])
         if f['advice_status']:
             try: t += '〔依据已变：%s〕' % json.loads(f['advice_status']).get('reason', '')[:40]
             except ValueError: t += '〔依据已变〕'
-        return t
-    return f['text'] + ('（含助手建议）' if f['source_role'] == 'mixed' and f['kind'] == 'suggestion' else '')
+        return prefix + t
+    return prefix + f['text'] + ('（含助手建议）' if f['source_role'] == 'mixed' and f['kind'] == 'suggestion' else '')
 
 
 def _groups(stores):
@@ -32,7 +37,8 @@ def _groups(stores):
     out = []
     for sc, st in stores.items():
         names = {o['id']: o['name'] for o in st.objects()}; by = {}
-        for f in st.facts(): by.setdefault(f['object'], []).append(f)
+        for f in st.facts():
+            by.setdefault(f['object'], []).append(f)
         for o, fs in by.items(): out.append((sc, o, names.get(o, ''), fs))
     return out
 
@@ -120,7 +126,8 @@ def read_objects(stores, object_ids, state=None, session=None, cap=READ_CAP):
         kids = {o['id'] for o in objs.values() if set(o['parents']) & ids}
         names = {k: v['name'] for k, v in objs.items()}
         by = {}
-        for f in st.facts(objects=ids | kids): by.setdefault(f['object'], []).append(f)
+        for f in st.facts(objects=ids | kids):
+            by.setdefault(f['object'], []).append(f)
         for o, fs in by.items():
             head = '【%s %s %s】' % (SCOPE_NAME[sc], names.get(o, ''), st.oid(o)); shown = False
             for f in fs:

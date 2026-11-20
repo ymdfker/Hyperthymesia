@@ -26,6 +26,8 @@ CREATE INDEX IF NOT EXISTS facts_object ON facts(object, active);
 CREATE TABLE IF NOT EXISTS fact_objects(fact INTEGER NOT NULL, object INTEGER NOT NULL, PRIMARY KEY(fact, object));
 CREATE TABLE IF NOT EXISTS evidence(fact INTEGER NOT NULL, source TEXT NOT NULL, quote TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS sources(id TEXT PRIMARY KEY, session TEXT, turn INTEGER, role TEXT, at TEXT, text TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS fact_conflicts(left_fact INTEGER NOT NULL, right_fact INTEGER NOT NULL, reason TEXT NOT NULL,
+  PRIMARY KEY(left_fact, right_fact));
 CREATE TABLE IF NOT EXISTS writer_operations(operation TEXT PRIMARY KEY, fact INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS writer_object_operations(operation TEXT PRIMARY KEY, object INTEGER NOT NULL);
 """
@@ -76,6 +78,11 @@ class Store:
 
     def __init__(self, path, scope):
         self.path = Path(path); self.scope = scope; self.db = connect(path)
+        # 旧库只扩展元数据，不推测旧记录类型或重写正文。
+        with tx(self.db):
+            columns = {r['name'] for r in self.db.execute('PRAGMA table_info(facts)')}
+            for name in ('assertion', 'applicability'):
+                if name not in columns: self.db.execute("ALTER TABLE facts ADD COLUMN %s TEXT NOT NULL DEFAULT ''" % name)
 
     # ---- 模型看到的编号
     def oid(self, n): return '%s%d' % (self.scope, n)
@@ -109,9 +116,12 @@ class Store:
             d.execute('INSERT OR IGNORE INTO sources VALUES(?,?,?,?,?,?)', (sid, session, turn, role, at, text))
 
     # ---- 事实
-    def add_fact(self, about, text, kind='fact', source_role='user', title='', evidence=(), supersedes=(), operation=None, historical_of=None):
+    def add_fact(self, about, text, kind='fact', source_role='user', title='', evidence=(), supersedes=(), operation=None, historical_of=None, assertion="", applicability=""):
         """about：对象 id 列表，第一个为归属对象。evidence：[(来源 id, 引用)]。supersedes：被本条取代的事实 id
         （它们失效并指向本条）。返回新事实 id。"""
+        if assertion not in ('', 'observation', 'request', 'decision', 'report'):
+            raise ValueError('未知陈述类型：' + str(assertion))
+        if not isinstance(applicability, str): raise ValueError('适用范围必须是文本')
         now = time.time()
         with tx(self.db) as d:
             if operation:
@@ -119,6 +129,7 @@ class Store:
                 if previous: return previous[0]
             n = d.execute('INSERT INTO facts(object, kind, source_role, title, text, created_at, updated_at) VALUES(?,?,?,?,?,?,?)',
                           (about[0], kind, source_role, title, text, now, now)).lastrowid
+            d.execute('UPDATE facts SET assertion=?, applicability=? WHERE id=?', (assertion, applicability, n))
             for o in dict.fromkeys(about): d.execute('INSERT OR IGNORE INTO fact_objects VALUES(?,?)', (n, o))
             for s, q in evidence: d.execute('INSERT INTO evidence VALUES(?,?,?)', (n, s, q))
             for old in supersedes:
@@ -127,6 +138,24 @@ class Store:
                 d.execute('UPDATE facts SET active=0, superseded_by=? WHERE id=?', (historical_of, n))
             if operation: d.execute('INSERT INTO writer_operations VALUES(?,?)', (operation, n))
         return n
+
+    def evidence(self, fact):
+        """引用与完整原文共同返回；原文只读，不把引用命中当成语义证明。"""
+        return [dict(r) for r in self.db.execute(
+            'SELECT e.source, e.quote, s.role, s.at, s.text FROM evidence e LEFT JOIN sources s ON s.id=e.source WHERE e.fact=?', (fact,))]
+
+    def mark_conflict(self, left, right, reason):
+        if left == right: return
+        a, b = self.fact(left), self.fact(right)
+        if not a or not b: raise ValueError('冲突记录不存在')
+        with tx(self.db) as d:
+            d.execute('INSERT OR REPLACE INTO fact_conflicts VALUES(?,?,?)', (*sorted((left, right)), reason))
+
+    def conflicts(self, fact):
+        # 一方明确被取代后，旧冲突不再作为当前冲突展示；历史边仍保留。
+        return [dict(r) for r in self.db.execute(
+            'SELECT c.* FROM fact_conflicts c JOIN facts a ON a.id=c.left_fact JOIN facts b ON b.id=c.right_fact '
+            'WHERE a.active=1 AND b.active=1 AND (c.left_fact=? OR c.right_fact=?)', (fact, fact))]
 
     def set_advice_status(self, fact, effect, reason):
         current = self.fact(fact)
@@ -150,8 +179,12 @@ class Store:
         rows = [dict(r) for r in d.execute('SELECT * FROM facts WHERE active=1 ORDER BY id' if active else 'SELECT * FROM facts ORDER BY id')]
         about = {}
         for f, o in d.execute('SELECT fact, object FROM fact_objects'): about.setdefault(f, []).append(o)
+        conflicts = {}
+        for row in d.execute('SELECT c.* FROM fact_conflicts c JOIN facts a ON a.id=c.left_fact JOIN facts b ON b.id=c.right_fact WHERE a.active=1 AND b.active=1'):
+            for n in (row['left_fact'], row['right_fact']): conflicts.setdefault(n, []).append(dict(row))
         out = []
         for r in rows:
+            r['conflicts'] = conflicts.get(r['id'], [])
             r['about'] = about.get(r['id'], [r['object']])
             if objects is None or set(r['about']) & set(objects): out.append(r)
         return out

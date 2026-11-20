@@ -195,10 +195,10 @@ def prices(provider, ids, old):
 
 # ---------------------------------------------------------------- 质量、速度和实际 token 准入
 # 短批/准入材料的宽松上限，不截断正式写入、不改变批量阈值。
-SELECTION_VERSION = 3
+SELECTION_VERSION = 4
 MAX_SCREEN_SECONDS = 120
 MAX_OUTPUT_RATIO = 4
-MAX_CANDIDATES = 2
+MAX_CANDIDATES = 4   # 准入最多试探4个最便宜的候选（Qoder反馈：2个太少，好用的模型轮不到）
 PROBE_PROMPT = (
     '抽取以下三轮的当前事实和未确认建议，只回复JSON：{\"facts\":{\"timeout\":\"…\",\"condition\":\"…\",'
     '\"reviewer\":\"…\",\"release\":\"…\"},\"suggestions\":[\"…\"]}。数值带单位，条件不能省略，不保存客套。\n'
@@ -232,7 +232,7 @@ def _probe_quality(got):
     """只评分这份固定准入题；不拿这些匹配规则审核用户真实记忆。"""
     if not isinstance(got, dict) or not isinstance(got.get('facts'), dict):
         return False, ['回复缺少facts对象']
-    facts = got['facts']; issues = []
+    facts = got['facts']; issues = []; warnings = []
     timeout = re.sub(r'\s+', '', str(facts.get('timeout', ''))).casefold()
     if timeout not in ('60秒', '60s', '60seconds', '60second', '1分钟', '1min', '1minute'):
         issues.append('超时新值未完整保留')
@@ -241,15 +241,22 @@ def _probe_quality(got):
         issues.append('工作日限定未完整保留')
     if str(facts.get('reviewer', '')).strip().casefold() != 'priya': issues.append('评审人新值错误')
     release = re.sub(r'\s+', '', str(facts.get('release', '')))
-    if not re.fullmatch(r'每(周|星期|礼拜)(四|4)(发布|上线)', release): issues.append('每周四发布未完整保留')
+    # 字段名 release 已表明是发布，值只写“每周四”也算完整。
+    if not re.fullmatch(r'每(周|星期|礼拜)(四|4)(发布|上线)?', release): issues.append('每周四发布未完整保留')
     suggestions = got.get('suggestions')
     if not isinstance(suggestions, list) or not suggestions or not all(isinstance(x, str) for x in suggestions):
         issues.append('未确认建议格式错误')
     else:
         text = '\n'.join(suggestions)
         if not all(k in text for k in ('现场', '日志')): issues.append('具体建议遗漏')
-        if '通知' in text: issues.append('保存了写通知的客套提议')
-    return not issues, issues
+        if '通知' in text: warnings.append('保存了写通知的客套提议')
+    # 客套提议只记警告：事实与具体建议都对时，多存一句客套不应让整个模型不可用（Qoder 反馈）。
+    return not issues, issues + warnings
+
+
+def writer_parse(text):
+    from . import writer
+    return writer.parse(text)
 
 
 def acceptance():
@@ -309,6 +316,11 @@ def choose(provider, refresh=False):
     # 旧自动结果中明确质量通过、仅缺token统计的记录可以重新判定，无需再次收费试探。
     if time.time() - c.get('at', 0) < TTL:
         for row in c.get('checked', []):
+            if row.get('model') in ids and row.get('quality_pass') is not True and row.get('reply') and not row.get('error'):
+                # 评分标准变了：用已保存的准入回复在本地重判，不重新请求模型。
+                try: good, issues = _probe_quality(writer_parse(row['reply']))
+                except ValueError: continue
+                row['quality_pass'] = good; row['quality_issues'] = issues; row['rescored'] = True
             if row.get('model') in ids and row.get('quality_pass') is True and _acceptable(row):
                 recent.setdefault(row['model'], []).append(row)
     qualified = [m for m, rows in recent.items() if all(_acceptable(r) for r in rows)]
@@ -339,7 +351,7 @@ def choose(provider, refresh=False):
 
 def explain(provider):
     c = _load().get(provider) or {}
-    if not c: return '尚未识别（首次写入优先复用已有验收；无记录时最多2次准入请求）'
+    if not c: return '尚未识别（首次写入优先复用已有验收；无记录时最多4次准入请求）'
     stale = c.get('selection_version') != SELECTION_VERSION
     selected = next((r for r in c.get('checked', []) if r.get('model') == c.get('model')), {})
     note = '旧版缓存待重新评估，不直接沿用' if stale else '已按质量与速度筛选'

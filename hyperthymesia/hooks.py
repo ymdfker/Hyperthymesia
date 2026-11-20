@@ -13,7 +13,7 @@ from pathlib import Path
 
 from . import changes, paths, reader
 from .store import state, tx
-from .execution import internal_env, is_internal
+from .execution import internal_env, is_internal, is_writer_workdir
 
 ALWAYS_FULL = {'trae'}   # 钩子不给会话记录路径的宿主：无法检查注入是否还在上文
 THRESHOLD = int(os.environ.get('HYPERTHYMESIA_BACKLOG_TOKENS', '16000'))   # 积压估算 token 达到此值触发写入（设计 25.5）
@@ -277,6 +277,8 @@ def spawn_writer(project, agent=''):
     if os.name == 'nt': kw['creationflags'] = 0x00000008 | 0x00000200   # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
     else: kw['start_new_session'] = True
     env = internal_env(); env.pop('CLAUDECODE', None)
+    # 打包版：钩子进程很快退出并删除自己的 _MEI 解包目录；子进程若继承该目录会缺 _socket/base_library.zip。
+    env['PYINSTALLER_RESET_ENVIRONMENT'] = '1'
     try:
         child = subprocess.Popen(self_cmd() + ['write', '--project', project] + (['--agent', agent] if agent else []), env=env, **kw)
     except OSError as exc:
@@ -327,7 +329,9 @@ def run(argv):
     out = {}
     try:
         d = json.loads(sys.stdin.read().lstrip('\ufeff').strip() or '{}')
-        if not (event in ('prompt-submit', 'stop') and is_subagent(d, agent)):
+        if is_writer_workdir(d.get('cwd') if isinstance(d, dict) else None):
+            pass   # 写入器自身会话：不抓取、不注入、不触发补写
+        elif not (event in ('prompt-submit', 'stop') and is_subagent(d, agent)):
             out = EVENTS[event](d, agent) or {}
     except Exception as exc:   # 钩子绝不能打断宿主
         _log('hook_error', '%s %s: %s' % (agent, event, exc))

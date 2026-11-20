@@ -27,6 +27,56 @@ class WriterTest(unittest.TestCase):
         providers.FAKE_REPLIES.extend(replies)
         return writer.write_batch(self.home, stores or {'u': self.u, 'p': self.p}, turns, state(self.home))
 
+    def test_claim_type_scope_and_source_survive_local_quote_repair(self):
+        t = self.turns(('本次演练将超时设为45秒。', '本次演练的超时已设为45秒。'))
+        main = J(objects=[{'key': 'k', 'name': '演练配置', 'scope': 'project'}], memories=[{
+            'text': '本次演练超时已设为45秒', 'assertion': 'report', 'applicability': '本次演练',
+            'about': ['k'], 'evidence': ['超时设为45秒已完成']}])
+        self.run_batch(t, main, J(quotes=[['本次演练的超时已设为45秒。']]), J(), J())
+        f = self.p.facts()[0]
+        self.assertEqual(f['text'], '本次演练超时已设为45秒')
+        self.assertEqual((f['assertion'], f['applicability']), ('report', '本次演练'))
+        self.assertEqual(self.p.evidence(f['id'])[0]['role'], 'assistant')
+        self.assertEqual(self.p.evidence(f['id'])[0]['text'], t[0]['assistant'])
+
+    def test_conflict_evidence_is_selected_not_union_and_links_survive(self):
+        a = self.p.add_object('配送'); b = self.p.add_object('合同')
+        self.p.add_source('old:u', 'old', 1, 'user', '2026-10-01', '运费原为20元，仅限城区。')
+        old = self.p.add_fact([a, b], '城区运费20元', evidence=[('old:u', '运费原为20元')], assertion='decision')
+        t = self.turns(('城区运费现在改为25元。', '收到。'))
+        main = J(memories=[{'text': '城区运费25元', 'about': ['p%d' % a], 'evidence': ['城区运费现在改为25元。'], 'assertion': 'decision'}])
+        def check(prompt):
+            self.assertIn('运费原为20元，仅限城区。', prompt)
+            self.assertEqual(prompt.count('[user 2026-10-01]'), 1)
+            refs = __import__('re').findall(r'rp\d+', prompt)
+            return J(replacements=[{'refs': refs[:2], 'memories': [{
+                'text': '城区运费25元', 'assertion': 'decision', 'applicability': '城区',
+                'evidence': ['城区运费现在改为25元。']}]}])
+        self.run_batch(t, main, check)
+        f = self.p.facts()[0]
+        self.assertFalse(self.p.fact(old)['active'])
+        self.assertEqual(set(f['about']), {a, b})
+        self.assertEqual([e['source'] for e in self.p.evidence(f['id'])], ['s1:1:u'])
+        self.assertEqual(f['assertion'], 'decision')
+
+    def test_uncertain_conflict_preserves_both_without_extra_call(self):
+        from hyperthymesia import reader
+        o = self.p.add_object('营业安排')
+        self.p.add_source('old:u', 'old', 1, 'user', '2026-11-01', '平常周三休息。')
+        old = self.p.add_fact([o], '平常周三休息', evidence=[('old:u', '平常周三休息。')])
+        t = self.turns(('这次好像周四休息，我还不确定。', '等确认。'))
+        main = J(memories=[{'text': '本次可能周四休息，未确认', 'about': ['p%d' % o], 'evidence': ['这次好像周四休息，我还不确定。']}])
+        def check(prompt):
+            refs = list(dict.fromkeys(__import__('re').findall(r'rp\d+', prompt)))
+            return J(conflicts=[{'refs': refs[:2], 'reason': '本次安排尚未确认，不能推翻平常安排'}])
+        result = self.run_batch(t, main, check)
+        self.assertEqual(result['calls'], 2)
+        self.assertEqual(len(self.p.facts()), 2)
+        ctx = reader.context({'p': self.p})
+        self.assertIn('有未决冲突', ctx)
+        self.assertIn('平常周三休息', ctx)
+        self.assertEqual(self.p.fact(old)['active'], 1)
+
     def test_scopes_evidence_and_roles(self):
         t = self.turns(('我女儿朵朵上二年级。项目里低库存阈值定成10。', '好的，阈值已改为10。建议加单元测试。'))
         main = J(objects=[{'key': 'k1', 'name': '朵朵', 'purpose': '女儿', 'scope': 'personal', 'parents': []},

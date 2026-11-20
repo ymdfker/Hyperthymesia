@@ -40,7 +40,7 @@ class Lock:
         import hashlib
         d = Path(home if home is not None else paths.home()) / 'locks'; d.mkdir(parents=True, exist_ok=True)
         self.p = d / (hashlib.sha1(project.encode()).hexdigest()[:16] + '.lock')
-        self.ok = False; self.handle = None; self.blocking = blocking
+        self.ok = False; self.handle = None; self.blocking = blocking; self.holder = None
     def __enter__(self):
         import errno
         fd = os.open(str(self.p), os.O_RDWR | os.O_CREAT, 0o600)
@@ -48,7 +48,7 @@ class Lock:
         try:
             legacy = self.handle.read().decode('ascii', errors='ignore').strip()
             if legacy.isdigit() and int(legacy) > 0 and _pid_alive(int(legacy)):
-                self.handle.close(); self.handle = None; return self
+                self.handle.close(); self.handle = None; self.holder = int(legacy); return self
             if not self.p.stat().st_size: self.handle.write(b' '); self.handle.flush()
             self.handle.seek(0)
             if os.name == 'nt':
@@ -59,13 +59,18 @@ class Lock:
                 fcntl.flock(fd, fcntl.LOCK_EX | (0 if self.blocking else fcntl.LOCK_NB))
         except OSError as exc:
             self.handle.close(); self.handle = None
-            if exc.errno in (errno.EACCES, errno.EAGAIN, errno.EDEADLK): return self
+            if exc.errno in (errno.EACCES, errno.EAGAIN, errno.EDEADLK):
+                self.holder = self._holder(); return self
             raise
         self.ok = True
         self.handle.seek(0); self.handle.truncate()
         self.handle.write(json.dumps({'pid': os.getpid(), 'acquired_at': time.time()}).encode())
         self.handle.flush()
         return self
+    def _holder(self):
+        # 只用于报错说明：读出持锁进程号；Windows 下被锁字节可能读不到，读不到就不显示。
+        try: return json.loads(self.p.read_text(encoding='ascii', errors='ignore') or '{}').get('pid')
+        except (OSError, ValueError, AttributeError): return None
     def __exit__(self, *args):
         if self.handle: self.handle.close(); self.handle = None
         self.ok = False
@@ -80,7 +85,8 @@ def write_project(project):
     """写入某个项目（空串表示没有项目，只有个人库）的全部积压；返回写入的轮次数，被锁时返回 None。
     写入期间新完成的轮次（其他会话结束时拉起的写入进程因锁而退出）在本进程写完一批后接着写，不留到下次；失败过的不在本次重试。"""
     with Lock(project) as lk:
-        if not lk.ok: return None
+        if not lk.ok:
+            write_project.holder = lk.holder; return None
         st = state(paths.home()); total = 0; tried = set(); failures = []
         while True:
             rows = [dict(r) for r in st.execute('SELECT * FROM backlog WHERE project=? AND written=0 AND completed_at IS NOT NULL ORDER BY started_at, session, turn', (project,))]
@@ -163,9 +169,23 @@ def run(argv):
         agent = r[0] if r else ''
     if agent: os.environ['HYPERTHYMESIA_HOST_AGENT'] = agent
     failed = False
+    from .execution import is_writer_workdir
     for p in projects:
+        if p and is_writer_workdir(p):
+            # 旧版本自我循环抓回的写入器会话，不是用户对话；不写入、不删除，留给用户自行清理。
+            print('%s：写入器自身工作目录的积压（旧版本自我循环产物），跳过，不写入记忆。' % p); continue
+        write_project.holder = None
         try: n = write_project(p)
         except Exception as exc:
             print('%s：写入失败，材料保留。%s' % (p or '（个人）', exc)); failed = True; continue
-        print('%s：%s' % (p or '（个人）', '已有写入进程在运行，跳过' if n is None else '写入 %d 轮' % n))
+        if n is None:
+            who = write_project.holder
+            msg = '批次被另一个写入进程占用%s，本次跳过；若该进程已卡住（例如升级前的旧版本），结束它后重试。' % ('（pid=%s）' % who if who else '')
+        else:
+            msg = '写入 %d 轮' % n
+            if n == 0:
+                st = state(paths.home())
+                open_rows = st.execute('SELECT COUNT(*) FROM backlog WHERE project=? AND written=0 AND completed_at IS NULL', (p,)).fetchone()[0]
+                if open_rows: msg += '（另有%d轮尚未完成，会话结束后才会写入）' % open_rows
+        print('%s：%s' % (p or '（个人）', msg))
     return 1 if failed else 0
