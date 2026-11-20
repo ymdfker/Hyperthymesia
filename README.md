@@ -249,11 +249,13 @@ base_url = "https://api.deepseek.com/v1"
 api_key_env = "DEEPSEEK_API_KEY"         # 只写环境变量名，key 本身放在环境变量里，本工具不保存
 ```
 
-**后台模型选择**：自动选择分别检查质量、速度和可获得的用量；宿主没有上报token时标为“未知”，不会仅因此拒绝模型，也不能把未知用量当成已证实低开销。准入题允许把同一方案的两个步骤分条保存，原始回复和判定原因脱敏记录在`logs/models.log`。`doctor --check-cli`只运行版本检查，不调用模型或刷新准入缓存。
+**后台模型选择**：自动选择分别检查质量、速度和可获得的用量；宿主没有上报token时标为“未知”，不会仅因此拒绝模型，也不能把未知用量当成已证实低开销。准入题允许把同一方案的两个步骤分条保存；多存一句“帮你写通知”这类客套话只记警告，不判模型不可用。无可用验收时最多试探4个最便宜的候选；评分标准更新后，已保存的准入回复会在本地重判，不重复花额度。原始回复和判定原因脱敏记录在`logs/models.log`。`doctor --check-cli`只运行版本检查，不调用模型或刷新准入缓存。
 
 如果你已确认某个模型在本机可用，可在`config.toml`显式设置`[writer]`下的`model = "你的宿主实际支持的模型ID"`。这会跳过自动准入，**不代表质量已验收**，也不会自动改用别家宿主或付费API。显式指定只控制模型，提供方仍遵循宿主或你自己的配置。自动选择失败会保留积压并给出日志和配置路径。
 
-**升级**：重新执行你那一节第 1 步的命令即可（会覆盖程序并重新接入，记忆保留）。
+**升级**：重新执行你那一节第 1 步的命令即可（会覆盖程序并重新接入，记忆保留）。如果你下载的是带版本号的文件（如`hyperthymesia-v0.2.8.exe`）并直接执行`install`，程序会先把自己复制到`~/.hyperthymesia/bin/`下的固定文件名，宿主配置只引用这个固定路径；以后替换它即可升级。
+
+**写入显示“批次被另一个写入进程占用”**：说明有别的写入进程（常见于升级前的旧版本）持有该项目的锁，提示里会给出pid；结束该进程后再执行`hyperthymesia write`。
 
 **卸载**：`hyperthymesia uninstall 你的agent`（移除本工具配置，保留其他条目；备份用于需要时手动恢复）。删除 `~/.hyperthymesia/` 即清空全部记忆。
 
@@ -418,6 +420,6 @@ Keep `state.db` and `logs/writer.log` when a write fails. After fixing the repor
 
 ### Writer model selection
 
-Automatic selection checks quality, latency and available token statistics. Missing telemetry is marked unknown; it does not by itself reject a model or prove low cost. Redacted probe replies and reasons are in `logs/models.log`. `doctor --check-cli` checks the CLI version without model requests or cache refresh.
+Automatic selection checks quality, latency and available token statistics. Missing telemetry is marked unknown; it does not by itself reject a model or prove low cost. A saved courtesy offer (such as "I can draft the notice") is only a warning, not a rejection. Without usable acceptance data, at most four cheapest candidates are probed; when scoring rules change, saved probe replies are rescored locally without new requests. Redacted probe replies and reasons are in `logs/models.log`. `doctor --check-cli` checks the CLI version without model requests or cache refresh.
 
 To select a model yourself, set `[writer] model = "YOUR_SUPPORTED_MODEL_ID"` in `config.toml`. Explicit selection bypasses automatic screening; it does not certify quality or change the provider. No automatic switch to another host or paid API is performed. Automatic CLI discovery skips unusable wrappers and continues searching; supported npm wrappers resolve to their actual JavaScript entrypoint.
