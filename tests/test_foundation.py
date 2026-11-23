@@ -60,7 +60,7 @@ class StoreTest(TmpHome):
         u = s.add_fact([o], '用户改为周二四六训练', evidence=[('t5u', '周二四六')])
         s.set_advice_status(a, 'basis_changed', '训练日已改')
         self.assertIn('basis_changed', s.fact(a)['advice_status'])
-        self.assertEqual(s.evidence_turns(), {'t5u'})   # 只有助手证据不算覆盖该轮
+        self.assertEqual(s.evidence_turns(), {'t3a', 't5u'})   # 按轮覆盖：助手来源也算该轮已处理
 
     def test_state_db_tables(self):
         st = state(self.root / 'home')

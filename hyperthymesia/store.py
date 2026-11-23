@@ -100,6 +100,26 @@ class Store:
             if operation: d.execute('INSERT INTO writer_object_operations VALUES(?,?)', (operation, n))
         return n
 
+    def find_object(self, name, parents):
+        """同名且父对象集合相同的已有对象 ID（原型 hierarchy：视为同一对象）；没有或不唯一返回 None。"""
+        ids = [r[0] for r in self.db.execute('SELECT id FROM objects WHERE name=?', (name,))]
+        same = [i for i in ids if {r[0] for r in self.db.execute('SELECT parent FROM object_parents WHERE child=?', (i,))} == set(parents)]
+        return same[0] if len(same) == 1 else None
+
+    def add_aliases(self, obj, aliases):
+        with tx(self.db) as d:
+            for a in aliases: d.execute('INSERT OR IGNORE INTO aliases VALUES(?,?)', (obj, a))
+
+    def merge_duplicate(self, keep, drop):
+        """正文相同的重复：drop 失效并指向 keep，drop 的来源与关联对象并入 keep。"""
+        with tx(self.db) as d:
+            d.execute('INSERT OR IGNORE INTO evidence(fact, source, quote) SELECT ?, source, quote FROM evidence WHERE fact=?', (keep, drop))
+            d.execute('INSERT OR IGNORE INTO fact_objects SELECT ?, object FROM fact_objects WHERE fact=?', (keep, drop))
+            d.execute('UPDATE facts SET active=0, superseded_by=?, updated_at=? WHERE id=? AND active=1', (keep, time.time(), drop))
+
+    def fact_about(self, fact):
+        return [r[0] for r in self.db.execute('SELECT object FROM fact_objects WHERE fact=?', (fact,))]
+
     def objects(self):
         """返回 [{id, name, purpose, parents, aliases, facts}]，facts 为有效事实数（写入器的对象索引）。"""
         d = self.db
@@ -194,9 +214,13 @@ class Store:
         return dict(r) if r else None
 
     def evidence_turns(self):
-        """被有效的用户/混合来源事实引用过的来源 id（缺口补写的覆盖检查用）。"""
+        """被任何记忆引用过的来源 id（缺口补写按轮覆盖检查用；用户、助手来源都算，已被取代的也算该轮处理过）。"""
+        return {r[0] for r in self.db.execute("SELECT DISTINCT source FROM evidence")}
+
+    def user_evidence_sources(self):
+        """被用户/混合来源事实引用过的来源 id（原型 §23.53：用户原话只被助手建议引用，也算没记下）。"""
         return {r[0] for r in self.db.execute(
-            "SELECT e.source FROM evidence e JOIN facts f ON f.id=e.fact WHERE f.source_role IN ('user','mixed')")}
+            "SELECT DISTINCT e.source FROM evidence e JOIN facts f ON f.id=e.fact WHERE f.source_role IN ('user','mixed')")}
 
     def text_size(self):
         return self.db.execute('SELECT COALESCE(SUM(LENGTH(text)),0) FROM facts WHERE active=1').fetchone()[0]

@@ -5,7 +5,7 @@
   .claude/settings.local.json 和 .mcp.json）。
 - codex：~/.codex/config.toml 末尾追加一段带标记的配置（--project 时为该项目的 .codex/config.toml）。
   Codex 的新钩子必须由用户在 Codex 里执行 /hooks 审核信任后才会运行，安装后会提示。"""
-import json, os, shutil, sys, subprocess
+import json, os, re, shutil, sys, subprocess
 from pathlib import Path
 
 from .hooks import self_cmd
@@ -66,6 +66,7 @@ def claude(project=None, remove=False):
 
 
 def codex(project=None, remove=False):
+    codex.note = ''
     home = Path(os.environ.get('HOME') or Path.home())
     cp = (Path(project) / '.codex' / 'config.toml') if project else home / '.codex' / 'config.toml'
     text = cp.read_text(encoding='utf-8-sig') if cp.exists() else ''
@@ -78,6 +79,13 @@ def codex(project=None, remove=False):
         for ev, name in CODEX_EVENTS.items():
             block += ['', '[[hooks.%s]]' % ev, '[[hooks.%s.hooks]]' % ev, 'type = "command"',
                       'command = %s' % json.dumps(_cmd('hook', name, '--agent', 'codex')), 'timeout = 60']
+        # 原型 §22/§23.37：记忆读取工具设为原生直连，结果完整进入模型；否则 code_mode 模型（如 gpt-5.6-luna）会把它放进 exec 脚本调用，
+        # 返回被外层约 1 万 token 上限截断（§23.29、§23.33 实测答错）。用户已有 [features.code_mode] 表时不重复写（重复表会让配置无法读取）。
+        if not re.search(r'(?m)^\s*\[features\.code_mode\]|^\s*features\.code_mode\b|code_mode\s*=\s*\{', text):
+            block += ['', '[features.code_mode]', 'direct_only_tool_namespaces = ["mcp__%s"]' % NAME]
+        else:
+            codex.note = ('你的 Codex 配置里已有 features.code_mode 设置，未自动修改；请在其中加入 direct_only_tool_namespaces = ["mcp__%s"]，'
+                          '否则部分模型会把记忆读取放进脚本调用、长结果被截断。' % NAME)
         block.append(MARK_END)
         text = (text.rstrip('\n') + '\n\n' if text.strip() else '') + '\n'.join(block) + '\n'
     cp.parent.mkdir(parents=True, exist_ok=True); _backup(cp); cp.write_text(text, encoding='utf-8')
@@ -365,4 +373,5 @@ def run(argv, remove=False):
         print(qoder_writer_check())
     if argv[0] == 'codex' and not remove:
         print('请在 Codex 里执行 /hooks，审核并信任 hyperthymesia 的钩子（新钩子未经信任不会运行）。')
+        if getattr(codex, 'note', ''): print(codex.note)
     return 0

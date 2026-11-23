@@ -9,7 +9,9 @@ from . import changes, paths, writer
 from .hooks import est_tokens
 from .store import Store, state, tx
 
-BATCH_TOKENS = int(os.environ.get('HYPERTHYMESIA_BATCH_TOKENS', '16000'))
+BATCH_TOKENS = int(os.environ.get('HYPERTHYMESIA_BATCH_TOKENS', '40000'))   # 两阶段写入：一批约20轮在批内切3个窗口、整理一次（f7 与原型 g 同跑法）；切成两批各整理一次时丢细节（f6）
+# 每批最多轮数：B 段原型按窗口抽取（20 轮切 6/7/7）实测全覆盖；一次给 12 轮时只覆盖 4–11 轮（2026-11-20 f3/f4 与对照实验）
+BATCH_TURNS = int(os.environ.get('HYPERTHYMESIA_BATCH_TURNS', '0') or 0) or 10**9   # 两阶段写入在批内按窗口抽取，默认不再按轮数切批
 EXPLICIT = re.compile(r'记住|记一下|记一条|记下|别忘|remember|keep in mind|note that', re.I)   # 用户明确要求记住
 def _pid_alive(pid):
     if os.name == 'nt':
@@ -151,7 +153,7 @@ def _write_rows(project, st, rows, failures=None, fixed_batch=False):
     if fixed_batch: return flush(rows)
     for r in rows:
         n = est_tokens((r['user_text'] or '') + (r['assistant_text'] or '')) + est_tokens(changes.change_block(r['diff'] or '', r['numstat'] or ''))
-        if batch and size + n > BATCH_TOKENS: done += flush(batch); batch = []; size = 0
+        if batch and (size + n > BATCH_TOKENS or len(batch) >= BATCH_TURNS): done += flush(batch); batch = []; size = 0
         batch.append(r); size += n
     if batch: done += flush(batch)
     return done

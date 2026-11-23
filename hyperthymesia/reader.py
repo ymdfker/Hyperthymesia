@@ -17,14 +17,14 @@ SCOPE_NAME = {'u': '个人', 'p': '项目'}
 def _digest(text): return hashlib.sha1(text.encode('utf-8')).hexdigest()[:12]
 
 
-def _line(f):
+def _line(f, full=False):
     tags = {'request': '用户要求', 'decision': '已作决定', 'report': '完成/状态报告', 'observation': '原始陈述'}
     prefix = ('〔' + tags[f['assertion']] + '〕') if f.get('assertion') in tags else ''
     if f.get('applicability'): prefix += '〔适用：' + f['applicability'] + '〕'
     if f.get('conflicts'): prefix += '〔有未决冲突：' + '；'.join(dict.fromkeys(c['reason'] for c in f['conflicts'])) + '〕'
 
     if f['kind'] == 'suggestion' and f['source_role'] == 'assistant':
-        t = '助手建议：' + (f['title'] or f['text'][:24])
+        t = '助手建议：' + ((f['title'] + '：' + f['text']) if full and f['title'] else f['text'] if full else (f['title'] or f['text'][:24]))
         if f['advice_status']:
             try: t += '〔依据已变：%s〕' % json.loads(f['advice_status']).get('reason', '')[:40]
             except ValueError: t += '〔依据已变〕'
@@ -77,13 +77,17 @@ def context(stores, state=None, session=None, limit=SNAPSHOT_LIMIT):
     if not stores or not any(st.facts() for st in stores.values()): return ''
     if snapshot_size(stores) > limit:
         idx = index_text(stores); key = ('_index', 0); dl = _delivered(state, session)
-        if dl.get(key) == _digest(idx): return ''
+        if dl.get(key) == _digest(idx):
+            # 原型 §23.31：目录没变、本会话读过的内容仍在上文时明说无需再读，避免前台每轮重复读取（§23.30 读取次数是前台开销大头）
+            if any(k[0] != '_index' for k in dl):
+                return '（已读取过的长期记忆自上次读取后没有变化，内容仍在上文，无需再读；只有需要尚未读过的对象时才读取。）'
+            return ''
         _mark(state, session, [('_index', 0, _digest(idx))])
         return ('长期记忆里记有以下事物（按库列出名称和对象ID，不含内容）：\n' + idx +
                 '\n当前请求涉及其中任何一项时，用方括号里的对象ID直接调用 memory_read_objects 工具取回相关记忆再回答；记忆里的说法优先于压缩摘要和常识。')
     dl = _delivered(state, session)
     groups = _groups(stores); fresh = not any(k[0] != '_index' for k in dl)
-    head = ('以下是长期记忆。用户事实已全文列出，直接据此回答；助手建议只列标题，需要具体内容时调用 memory_read_objects(object_ids=[【】里的对象ID]) 读取。'
+    head = ('以下是长期记忆。用户事实已全文列出，直接据此回答；助手建议只列标题，需要具体内容时调用 memory_read_objects(object_ids=[【】里的对象ID], full=true) 读取。'
             '记忆里的说法优先于压缩摘要和常识；助手建议不等于用户已采纳；记忆里出现相互矛盾的说法时如实指出，不替用户猜；记忆由后台自动整理，不要对用户说“已保存到记忆”。')
     new_lines = []; marks = []
     for sc, o, name, fs in groups:
@@ -112,8 +116,9 @@ def context(stores, state=None, session=None, limit=SNAPSHOT_LIMIT):
     return '\n'.join(out)
 
 
-def read_objects(stores, object_ids, state=None, session=None, cap=READ_CAP):
-    """MCP 读取工具：返回对象（含直接子对象）的有效记录，按对象分组的纯文本。"""
+def read_objects(stores, object_ids, state=None, session=None, cap=READ_CAP, full=False, history=False):
+    """MCP 读取工具：返回对象（含全部下级对象，原型 select_memories 口径）的记录，按对象分组的纯文本。
+    full：助手建议给正文（原型靠“建议只存一句”弥补，产品版建议存完整方案，必须有读取正文的路径）；history：同时给已失效的旧记录。"""
     stores = {k: v for k, v in stores.items() if v is not None}
     want = {}
     for i in object_ids or []:
@@ -123,15 +128,20 @@ def read_objects(stores, object_ids, state=None, session=None, cap=READ_CAP):
     dl = _delivered(state, session); lines = []; size = 0; left = {}; same = 0; marks = []
     for sc, ids in want.items():
         st = stores[sc]; objs = {o['id']: o for o in st.objects()}
-        kids = {o['id'] for o in objs.values() if set(o['parents']) & ids}
+        kids = set(); todo = list(ids)
+        while todo:   # 递归展开全部下级对象
+            cur = todo.pop()
+            for o in objs.values():
+                if cur in o['parents'] and o['id'] not in kids and o['id'] not in ids: kids.add(o['id']); todo.append(o['id'])
         names = {k: v['name'] for k, v in objs.items()}
         by = {}
-        for f in st.facts(objects=ids | kids):
+        for f in st.facts(objects=ids | kids, active=not history):
             by.setdefault(f['object'], []).append(f)
         for o, fs in by.items():
             head = '【%s %s %s】' % (SCOPE_NAME[sc], names.get(o, ''), st.oid(o)); shown = False
             for f in fs:
-                ln = _line(f); d = _digest(ln); k = (st.path.name, f['id'])
+                ln = _line(f, full) + ('' if f['active'] else '〔已失效%s〕' % ('，被 %s 取代' % st.rid(f['superseded_by']) if f.get('superseded_by') else ''))
+                d = _digest(ln); k = (st.path.name, f['id'])
                 if dl.get(k) == d: same += 1; continue
                 ev = st.db.execute('SELECT s.at FROM evidence e LEFT JOIN sources s ON s.id=e.source WHERE e.fact=? LIMIT 1', (f['id'],)).fetchone()
                 tag = '（%s%s）' % ({'user': '用户', 'assistant': '助手', 'mixed': '用户+助手'}[f['source_role']], ' ' + ev[0][:10] if ev and ev[0] else '')

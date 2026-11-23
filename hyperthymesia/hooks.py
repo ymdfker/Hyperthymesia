@@ -16,7 +16,7 @@ from .store import state, tx
 from .execution import internal_env, is_internal, is_writer_workdir
 
 ALWAYS_FULL = {'trae'}   # 钩子不给会话记录路径的宿主：无法检查注入是否还在上文
-THRESHOLD = int(os.environ.get('HYPERTHYMESIA_BACKLOG_TOKENS', '16000'))   # 积压估算 token 达到此值触发写入（设计 25.5）
+THRESHOLD = int(os.environ.get('HYPERTHYMESIA_BACKLOG_TOKENS', '28000'))   # 积压估算 token 达到此值触发写入；原 16000（设计 25.5），两阶段写入攒约20轮一起整理效果更好（2026-11-20 f6、f7 对照）
 
 
 # ---------------------------------------------------------------- 会话记录：取助手本轮最终回复

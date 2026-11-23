@@ -5,6 +5,7 @@ from unittest import mock
 
 from hyperthymesia import models, paths, providers, writecmd
 from hyperthymesia.store import close_all, state
+os.environ.setdefault('HYPERTHYMESIA_WRITER_MODE', 'single')   # 这些用例按一次调用流程预设回答；两阶段流程见 test_staged.py
 
 
 class ThirdRoundTest(unittest.TestCase):

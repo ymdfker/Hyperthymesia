@@ -5,6 +5,7 @@ from unittest import mock
 
 from hyperthymesia import hooks, install, models
 from hyperthymesia.store import close_all
+os.environ.setdefault('HYPERTHYMESIA_WRITER_MODE', 'single')   # 这些用例按一次调用流程预设回答；两阶段流程见 test_staged.py
 
 PRICING_MD = """| 模型 | 模型 | 模型 | deepseek-flash(1) | deepseek-v4-pro |
 | --- | --- | --- | --- | --- |

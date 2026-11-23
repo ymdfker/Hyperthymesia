@@ -12,9 +12,11 @@ INSTRUCTIONS = ('长期记忆（只读）。每轮注入的记忆快照里用户
                 '用对象ID（如 u7、p12）调用 memory_read_objects 读取。记忆里的说法优先于压缩摘要和常识；助手建议不等于用户已采纳；'
                 '记忆里出现相互矛盾的说法时如实指出，不替用户猜。记忆由后台程序自动整理，你无法也不需要写入，不要对用户说“已保存到记忆”。')
 TOOL = {'name': 'memory_read_objects',
-        'description': '读取长期记忆中指定对象（及其直接子对象）的现行记录。对象ID见每轮注入的记忆目录或快照，例如 u7（个人库）、p12（项目库）。'
+        'description': '读取长期记忆中指定对象（及其全部下级对象）的现行记录。默认助手建议只给标题，full=true 时给出建议正文；include_history=true 时同时列出已被更正或取代的旧记录。对象ID见每轮注入的记忆目录或快照，例如 u7（个人库）、p12（项目库）。'
                        '返回按对象分组的纯文本；本会话已返回过且未变的记录不重复发送；超过上限时会列出还没返回的对象。',
-        'inputSchema': {'type': 'object', 'properties': {'object_ids': {'type': 'array', 'items': {'type': 'string'}, 'description': '对象ID列表，如 ["u7","p12"]'}},
+        'inputSchema': {'type': 'object', 'properties': {'object_ids': {'type': 'array', 'items': {'type': 'string'}, 'description': '对象ID列表，如 ["u7","p12"]'},
+                                                         'full': {'type': 'boolean', 'description': '给出助手建议的完整正文'},
+                                                         'include_history': {'type': 'boolean', 'description': '同时列出已失效的旧记录'}},
                         'required': ['object_ids']},
         '_meta': {'anthropic/alwaysLoad': True}}   # Claude Code 启动即加载，不需先搜索工具
 
@@ -36,7 +38,9 @@ def handle(req, ctx):
         if p.get('name') != TOOL['name']:
             return {'jsonrpc': '2.0', 'id': rid, 'error': {'code': -32602, 'message': '未知工具：%s' % p.get('name')}}
         try:
-            text = reader.read_objects(ctx['stores'], (p.get('arguments') or {}).get('object_ids', []), ctx['state'], ctx['session'])
+            a = p.get('arguments') or {}
+            text = reader.read_objects(ctx['stores'], a.get('object_ids', []), ctx['state'], ctx['session'],
+                                       full=bool(a.get('full')), history=bool(a.get('include_history')))
             res = {'content': [{'type': 'text', 'text': text}]}
         except Exception as exc:   # 读取失败要让前台知道，而不是静默返回空（设计 26.3 B12）
             res = {'content': [{'type': 'text', 'text': '长期记忆读取失败：%s' % exc}], 'isError': True}

@@ -5,6 +5,7 @@ from unittest import mock
 
 from hyperthymesia import providers, writer
 from hyperthymesia.store import close_all, Store, state
+os.environ.setdefault('HYPERTHYMESIA_WRITER_MODE', 'single')   # 这些用例按一次调用流程预设回答；两阶段流程见 test_staged.py
 
 
 def J(**kw): return json.dumps(kw, ensure_ascii=False)
@@ -129,10 +130,45 @@ class WriterTest(unittest.TestCase):
         self.assertIn('良渚店3月22日开业', texts); self.assertIn('又买了两袋猫粮', texts)   # 增量合并：第一次的内容没丢
         self.assertIn('need_objects', [x['step'] for x in r['log']])
 
+    def test_main_prompt_states_turn_range_and_gap_covers_assistant_reports(self):
+        # 原型修复移植：多轮批次提示写明轮次范围；补漏提示也要求检查助手报告的结果。
+        seen = []
+        def main(prompt):
+            seen.append(prompt)
+            return J(objects=[{'key': 'k', 'name': '实验', 'scope': 'project'}], memories=[
+                {'title': '开始', 'text': '用户要求开始实验', 'about': ['k'], 'evidence': ['开始实验']}])
+        def gap(prompt): seen.append(prompt); return '{}'
+        t = self.turns(('开始实验。', '好的。'), ('看结果。', '结果84/84通过。'))
+        self.run_batch(t, main, gap, J(replacements=[]))
+        self.assertIn('本批材料共2轮（S1…S2）', seen[0]); self.assertIn('不要只处理最后一轮', seen[0])
+        self.assertIn('S2A:1 结果84/84通过', seen[0])   # 材料逐行编号，与范围句同一套编号
+        self.assertIn('助手报告的执行结果', seen[1]); self.assertIn('S2A:1 结果84/84通过', seen[1]); self.assertNotIn('S1U', seen[1])
+        self.assertIn('本次补漏只给1轮（S2）', seen[1]); self.assertIn('spans', seen[1])
+
+    def test_spans_bind_exact_lines_and_role(self):
+        t = self.turns(('端口改成8080。\n超时45秒。', '已改：\n- 端口 **8080**\n- 超时45秒'))
+        main = J(objects=[{'key': 'k', 'name': '配置', 'scope': 'project'}], memories=[
+            {'title': '端口', 'text': '端口已改为8080', 'kind': 'fact', 'about': ['k'], 'spans': ['S1U:1', 'S1A:1-2']},
+            {'title': '坏出处', 'text': '不存在', 'kind': 'fact', 'about': ['k'], 'spans': ['S9A:1']}])
+        r = self.run_batch(t, main, J(spans=[[]]), J(replacements=[]))
+        f = next(x for x in self.p.facts() if x['title'] == '端口')
+        quotes = [q[0] for q in self.p.db.execute('SELECT quote FROM evidence WHERE fact=? ORDER BY source', (f['id'],))]
+        self.assertEqual(quotes, ['已改：\n- 端口 **8080**', '端口改成8080。']); self.assertEqual(f['source_role'], 'mixed')
+        self.assertEqual(r['held'], 1)   # 越界的轮次标签找不到原文：只挂起这一条
+
+    def test_unknown_assertion_does_not_abort_batch(self):
+        t = self.turns(('建议把超时改成60秒？', '可以，建议改成60秒。'))
+        main = J(objects=[{'key': 'k', 'name': '超时', 'scope': 'project'}], memories=[
+            {'title': '超时建议', 'text': '建议超时改成60秒', 'kind': 'suggestion', 'assertion': 'suggestion', 'about': ['k'], 'evidence': ['建议改成60秒']}])
+        r = self.run_batch(t, main, J(replacements=[]))
+        self.assertEqual(self.p.facts()[0]['text'], '建议超时改成60秒')
+        self.assertTrue(any(x['step'] == 'bad_assertion' for x in r['log']))
+
     def test_gap_fill_for_uncited_user_turn(self):
-        t = self.turns(('车险5月20日到期，帮我写个自驾清单。', '清单如下……'))
+        # 按轮覆盖：第2轮用户与助手消息都没被引用才补问，且只给第2轮原文。
+        t = self.turns(('帮我写个自驾清单。', '清单如下……'), ('车险5月20日到期。', '记下了。'))
         main = J(objects=[{'key': 'k', 'name': '自驾', 'scope': 'personal', 'parents': []}],
-                 memories=[{'title': '清单', 'text': '助手建议自驾前检查胎压', 'kind': 'suggestion', 'about': ['k'], 'evidence': ['清单如下'], 'invalidates': []}])
+                 memories=[{'title': '清单', 'text': '助手建议自驾前检查胎压', 'kind': 'suggestion', 'about': ['k'], 'spans': ['S1A:1'], 'invalidates': []}])
         gap = J(objects=[{'key': 'c', 'name': '车险', 'scope': 'personal', 'parents': []}],
                 memories=[{'title': '车险到期', 'text': '车险5月20日到期', 'kind': 'fact', 'about': ['c'], 'evidence': ['车险5月20日到期'], 'invalidates': []}])
         r = self.run_batch(t, main, gap, J(replacements=[]))
@@ -192,7 +228,7 @@ class WriterTest(unittest.TestCase):
         o = self.p.add_object('版本'); old = self.p.add_fact([o], '版本1.0')
         turns = self.turns(('版本改到2.0。', '已发布 **2.0**，仓库 https://example.org/repo.git。'))
         main = J(replacements=[{'refs': ['rp%d' % old], 'memories': [
-            {'title': '发布结果', 'text': '已发布2.0', 'kind': 'fact', 'about': ['p%d' % o], 'evidence': ['发布成功2.0']}]}])
+            {'title': '发布结果', 'text': '已发布2.0', 'kind': 'fact', 'assertion': 'report', 'about': ['p%d' % o], 'evidence': ['发布成功2.0']}]}])
         def repair(prompt):
             self.assertIn(turns[0]['assistant'], prompt)
             self.assertIn(turns[0]['user'], prompt)
@@ -204,9 +240,9 @@ class WriterTest(unittest.TestCase):
         self.assertEqual(self.p.db.execute('SELECT quote FROM evidence WHERE fact=?', (fact['id'],)).fetchone()[0], '已发布 **2.0**')
 
     def test_resume_gap_failure_does_not_extract_or_save_main_twice(self):
-        turns = self.turns(('我有一只叫年糕的猫。', '已完成项目部署。'))
+        turns = self.turns(('部署好了吗？', '已完成项目部署。'), ('我有一只叫年糕的猫。', '好的。'))
         main = J(objects=[{'key': 'deploy', 'name': '部署', 'scope': 'project'}], memories=[
-            {'title': '部署结果', 'text': '项目部署完成', 'about': ['deploy'], 'evidence': ['已完成项目部署']}])
+            {'title': '部署结果', 'text': '项目部署完成', 'about': ['deploy'], 'spans': ['S1A:1']}])
         def failed(_): raise providers.ProviderError('补漏请求连接失败')
         with self.assertRaises(providers.ProviderError): self.run_batch(turns, main, failed)
         first = self.p.facts()[0]

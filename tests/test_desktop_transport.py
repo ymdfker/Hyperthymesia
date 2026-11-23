@@ -4,6 +4,7 @@ from pathlib import Path
 from unittest import mock
 from hyperthymesia import hooks,install,launch,paths,providers,writecmd,writer
 from hyperthymesia.store import close_all,state
+os.environ.setdefault('HYPERTHYMESIA_WRITER_MODE', 'single')   # 这些用例按一次调用流程预设回答；两阶段流程见 test_staged.py
 
 class DesktopTransportTest(unittest.TestCase):
     def test_bad_automatic_wrapper_does_not_hide_desktop_entry(self):
