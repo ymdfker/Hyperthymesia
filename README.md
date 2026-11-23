@@ -82,7 +82,7 @@ hyperthymesia doctor --agent claude
 在 Codex 输入框里输入 `/hooks` 回车，在列表里找到 hyperthymesia，选择批准（信任）。
 不批准的话 Codex 不会运行它，记忆不会生效。
 
-安装会在 Codex 配置里加入 `[features.code_mode]` 的 `direct_only_tool_namespaces = ["mcp__hyperthymesia"]`，让记忆读取结果完整交给模型，不被代码模式截断。如果你的配置里已有 `features.code_mode` 设置，安装不会改动，只会提示你手动把这一项加进去。
+安装会在 Codex 配置里加入 `[features.code_mode]` 的 `direct_only_tool_namespaces = ["mcp__hyperthymesia"]`，并把全局 `tool_output_token_limit` 和记忆读取工具的 `output_token_limit` 设为 262144（你已自设全局上限则不改），让记忆读取结果完整交给模型，不被截断。如果你的配置里已有 `features.code_mode` 设置，安装不会改动，只会提示你手动把这一项加进去。
 
 **4. 检查（可选）**
 
@@ -437,7 +437,7 @@ Writing runs in two steps. A batch (triggered at about 28,000 backlog tokens, ca
 
 Reading: with many memories only a directory is injected; the agent calls `memory_read_objects`, optionally with `full=true` (full assistant suggestions) or `include_history=true` (superseded values). An unchanged directory is not resent.
 
-For Codex, installation adds `direct_only_tool_namespaces = ["mcp__hyperthymesia"]` under `[features.code_mode]` so memory reads reach the model untruncated. If your config already sets `features.code_mode`, it is left untouched and you are told to add the entry yourself.
+For Codex, installation adds `direct_only_tool_namespaces = ["mcp__hyperthymesia"]` under `[features.code_mode]` and sets the global `tool_output_token_limit` and the memory tool's `output_token_limit` to 262144 (an existing global limit is kept), so memory reads reach the model untruncated. If your config already sets `features.code_mode`, it is left untouched and you are told to add the entry yourself.
 
 ### Writer model selection
 

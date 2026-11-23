@@ -65,17 +65,25 @@ def claude(project=None, remove=False):
     return [sp, mp]
 
 
+CODEX_OUTPUT_LIMIT = 262144
+MARK_TOP_BEGIN = MARK_BEGIN.replace('hyperthymesia', 'hyperthymesia top', 1) if 'hyperthymesia' in MARK_BEGIN else MARK_BEGIN + ' top'
+MARK_TOP_END = MARK_END.replace('hyperthymesia', 'hyperthymesia top', 1) if 'hyperthymesia' in MARK_END else MARK_END + ' top'
+
+
 def codex(project=None, remove=False):
     codex.note = ''
     home = Path(os.environ.get('HOME') or Path.home())
     cp = (Path(project) / '.codex' / 'config.toml') if project else home / '.codex' / 'config.toml'
     text = cp.read_text(encoding='utf-8-sig') if cp.exists() else ''
-    if MARK_BEGIN in text:
-        a = text.index(MARK_BEGIN); b = text.index(MARK_END, a) + len(MARK_END)
-        text = (text[:a].rstrip('\n') + '\n' + text[b:].lstrip('\n')).strip('\n') + ('\n' if text.strip() else '')
+    for begin, end in ((MARK_TOP_BEGIN, MARK_TOP_END), (MARK_BEGIN, MARK_END)):
+        if begin in text:
+            a = text.index(begin); b = text.index(end, a) + len(end)
+            text = (text[:a].rstrip('\n') + '\n' + text[b:].lstrip('\n')).strip('\n') + ('\n' if text.strip() else '')
     if not remove:
         c = self_cmd()
-        block = [MARK_BEGIN, '[mcp_servers.%s]' % NAME, 'command = %s' % json.dumps(c[0]), 'args = %s' % json.dumps(c[1:] + ['serve'])]
+        block = [MARK_BEGIN, '[mcp_servers.%s]' % NAME, 'command = %s' % json.dumps(c[0]), 'args = %s' % json.dumps(c[1:] + ['serve']),
+                 # 原型 §22/§23.37 实测配置：读取工具返回上限 262144，避免长结果被截断
+                 '', '[mcp_servers.%s.tools.memory_read_objects]' % NAME, 'output_token_limit = %d' % CODEX_OUTPUT_LIMIT]
         for ev, name in CODEX_EVENTS.items():
             block += ['', '[[hooks.%s]]' % ev, '[[hooks.%s.hooks]]' % ev, 'type = "command"',
                       'command = %s' % json.dumps(_cmd('hook', name, '--agent', 'codex')), 'timeout = 60']
@@ -88,6 +96,9 @@ def codex(project=None, remove=False):
                           '否则部分模型会把记忆读取放进脚本调用、长结果被截断。' % NAME)
         block.append(MARK_END)
         text = (text.rstrip('\n') + '\n\n' if text.strip() else '') + '\n'.join(block) + '\n'
+        # 全局 tool_output_token_limit 是顶层键，必须写在所有表之前；用户已自设则不改
+        if not re.search(r'(?m)^\s*tool_output_token_limit\s*=', text):
+            text = '%s\ntool_output_token_limit = %d\n%s\n\n' % (MARK_TOP_BEGIN, CODEX_OUTPUT_LIMIT, MARK_TOP_END) + text
     cp.parent.mkdir(parents=True, exist_ok=True); _backup(cp); cp.write_text(text, encoding='utf-8')
     return [cp]
 
