@@ -82,6 +82,8 @@ hyperthymesia doctor --agent claude
 在 Codex 输入框里输入 `/hooks` 回车，在列表里找到 hyperthymesia，选择批准（信任）。
 不批准的话 Codex 不会运行它，记忆不会生效。
 
+安装会在 Codex 配置里加入 `[features.code_mode]` 的 `direct_only_tool_namespaces = ["mcp__hyperthymesia"]`，让记忆读取结果完整交给模型，不被代码模式截断。如果你的配置里已有 `features.code_mode` 设置，安装不会改动，只会提示你手动把这一项加进去。
+
 **4. 检查（可选）**
 
 新开一个终端（或 PowerShell），执行：
@@ -289,6 +291,10 @@ api_key_env = "DEEPSEEK_API_KEY"         # 只写环境变量名，key 本身放
 agent 的最终回复和本轮代码改动；积压够多或会话结束时，后台用该 agent 最便宜的模型整理进 `~/.hyperthymesia/`，
 旧值被新值取代时自动失效。代码改动通过独立的影子仓库记录，不碰你的 git 历史；`.env`、私钥等凭据文件不读取。
 
+**后台整理分两步**：先把一批对话（默认积压约 28000 token 触发，单批上限约 40000 token，约 20 轮）分成最多 3 段逐轮抽取，材料按轮编号，模型只给出处编号，原文由程序复制；没抽到任何内容的轮次会单独补问。再整理一次：带上相关旧记录，判断哪些已存在、哪些更正旧值、哪些应合并或拆分，以及新事项是否并入已有对象（只能并入它看过旧记录的对象，否则新建）。做不了的个别项挂起到 `held_entries.jsonl`，不让整批失败。阈值可用环境变量 `HYPERTHYMESIA_BACKLOG_TOKENS`、`HYPERTHYMESIA_BATCH_TOKENS` 调整；`HYPERTHYMESIA_WRITER_MODE=single` 改回旧的一次调用写法。
+
+**读取**：记忆多时只注入目录；agent 用 `memory_read_objects` 按对象读取，可加 `full=true` 看助手建议全文，加 `include_history=true` 看已失效的旧值。目录自上次读取后没变时不重复返回。
+
 ## English user guide
 
 Hyperthymesia gives AI agents long-term memory across chats. It captures facts, decisions, project conventions and code changes, then makes relevant memories available in later conversations.
@@ -424,6 +430,14 @@ Use `HYPERTHYMESIA_HOME` for the memory directory. Executable extraction still u
 ### Resuming failed writes
 
 Keep `state.db` and `logs/writer.log` when a write fails. After fixing the reported configuration or connection problem, run `hyperthymesia write` to resume the unfinished stage. Correct objects and facts are retained; the whole chat need not be imported again. An entry with unresolved source references remains pending. Processing completion does not certify that every useful fact was extracted correctly; inspect the saved context and correct mistakes in normal conversation.
+
+### How background writing works
+
+Writing runs in two steps. A batch (triggered at about 28,000 backlog tokens, capped at about 40,000 tokens, roughly 20 turns) is first extracted in up to three windows; turns are numbered, the model cites positions only, and the program copies the original text. Turns with nothing extracted are asked again individually. One organize step then compares candidates with related existing records: duplicates, corrections, merges, splits, and whether a new subject belongs to an existing object (only an object whose records the model was shown; otherwise a new object is created). Items that cannot be applied are held in `held_entries.jsonl` instead of failing the batch. Tune with `HYPERTHYMESIA_BACKLOG_TOKENS` and `HYPERTHYMESIA_BATCH_TOKENS`; `HYPERTHYMESIA_WRITER_MODE=single` restores the older single-call writer.
+
+Reading: with many memories only a directory is injected; the agent calls `memory_read_objects`, optionally with `full=true` (full assistant suggestions) or `include_history=true` (superseded values). An unchanged directory is not resent.
+
+For Codex, installation adds `direct_only_tool_namespaces = ["mcp__hyperthymesia"]` under `[features.code_mode]` so memory reads reach the model untruncated. If your config already sets `features.code_mode`, it is left untouched and you are told to add the entry yourself.
 
 ### Writer model selection
 
