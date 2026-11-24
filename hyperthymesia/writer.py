@@ -274,6 +274,18 @@ class Batch:
         elif self.project: parts.insert(0, '当前项目：%s（%s）。本批对话在这个项目里进行。' % (Path(self.project).name, self.project))
         return '\n\n'.join(parts)
 
+    def _fact_records(self, keys):
+        """指定事实（如本批新存的）按读取口径登记进 seen 并返回，供补漏时引用。"""
+        out = []
+        for sc, n in keys:
+            st = self.stores[sc]; f = st.fact(n)
+            if not f or not f['active']: continue
+            ref = st.rid(n); ro = f['kind'] == 'suggestion' and f['source_role'] == 'assistant'
+            r = {'scope': sc, 'id': n, 'object': f['object'], 'readonly': ro, 'text': f['text'], 'advice': bool(f.get('advice_status')), 'about': st.fact_about(n) or [f['object']],
+                 'assertion': f.get('assertion', ''), 'applicability': f.get('applicability', '')}
+            self.seen[ref] = r; out.append((ref, r))
+        return out
+
     def _records(self, sc, objs):
         st = self.stores[sc]; out = []
         for f in st.facts(objects=objs):
@@ -646,7 +658,10 @@ class Batch:
             part = gaps[i:i + self.GAP_WINDOW]
             scope = ('本次补漏只给%d轮（%s），编号沿用本批原编号；每一轮（SnU用户、SnA助手）都要按同样规则处理，每条记忆用spans写明依据的轮次与行号。'
                      % (len(part), '、'.join('S%d' % n for n in part)))
-            prompt = (GAP_NOTE + scope + '\n<object_index>\n' + self.index_text() + '\n</object_index>\n<old_records>\n' + self.render(list(self.seen.items())) +
+            # 只带本批已保存的记录（不重发全部旧记录）：每个补问窗口都重发整库会让费用随库大小成倍增长（2026-11-23 重导第5批：4次补问各约14万token）；
+            # 与旧记录的重复/取代由随后的冲突检查处理
+            recs = self._fact_records(self.new_facts)
+            prompt = (GAP_NOTE + scope + '\n<object_index>\n' + self.index_text() + '\n</object_index>\n<old_records>\n' + self.render(recs) +
                       '\n</old_records>\n<conversation_material>\n' + self.material(set(part)) + '\n</conversation_material>\n只回复JSON。')
             try:
                 got = validate_submission(parse(self.ask(prompt).text)); got.pop('_dropped_fields', None); self.apply(got, quote_retry=True)

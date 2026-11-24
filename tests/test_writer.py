@@ -175,6 +175,17 @@ class WriterTest(unittest.TestCase):
         self.assertIn('车险5月20日到期', [f['text'] for f in self.u.facts()])
         self.assertTrue(any(x['step'] == 'gap_fill' and x['added'] == 1 for x in r['log']))
 
+    def test_gap_prompt_carries_only_batch_new_records(self):
+        # 补漏只带本批新存记录，不重发整库旧记录（2026-11-23 重导费用随库成倍增长）
+        o = self.u.add_object('旅行'); self.u.add_fact([o], '旧记录：护照2030年到期', evidence=[('s0:1:u', '护照2030年到期')])
+        t = self.turns(('帮我写个自驾清单。', '清单如下……'), ('车险5月20日到期。', '记下了。'))
+        main = J(memories=[{'title': '清单', 'text': '助手建议自驾前检查胎压', 'kind': 'suggestion', 'about': ['u%d' % o], 'spans': ['S1A:1'], 'invalidates': []}])
+        prompts = []
+        def gap(prompt): prompts.append(prompt); return J()
+        self.run_batch(t, main, gap, J(replacements=[]))
+        self.assertTrue(prompts)
+        self.assertNotIn('护照2030年到期', prompts[0]); self.assertIn('检查胎压', prompts[0])
+
     def test_conflict_check_merges_old_and_new_value(self):
         o = self.p.add_object('杯子'); old = self.p.add_fact([o], '绿源可降解杯每个0.42元', evidence=[('s0:1:u', '0.42元')])
         t = self.turns(('绿源可降解杯现在每个0.39元。', '好的。'))
